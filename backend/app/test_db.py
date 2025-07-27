@@ -1,21 +1,12 @@
-from sqlalchemy import create_engine, event
-from sqlalchemy.pool import StaticPool
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+import os
 from .db import Base
 
-SQLITE_DATABASE_URL = "sqlite:///:memory:"
+# Use PostgreSQL test database
+POSTGRES_TEST_URL = os.getenv("TEST_DATABASE_URL", "postgresql://postgres:password@postgres_test:5432/lexitau_test")
 
-engine = create_engine(
-    SQLITE_DATABASE_URL, 
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool
-)
-
-# Enable foreign key constraints for SQLite
-def _fk_pragma_on_connect(dbapi_con, con_record):
-    dbapi_con.execute('pragma foreign_keys=ON')
-
-event.listen(engine, 'connect', _fk_pragma_on_connect)
+engine = create_engine(POSTGRES_TEST_URL)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def get_test_db():
