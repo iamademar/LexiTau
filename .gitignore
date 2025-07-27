@@ -1,0 +1,5 @@
+.cursor/
+__pycache__/
+*.py[cod]
+repomix-output.xml
+.claude/
