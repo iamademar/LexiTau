@@ -17,7 +17,10 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 def get_url():
-    return os.getenv("DATABASE_URL", "postgresql://postgres:password@localhost:5432/lexitau")
+    url = os.getenv("DATABASE_URL", "postgresql://postgres:password@localhost:5432/lexitau")
+    if url.startswith("postgresql+asyncpg://"):
+        url = url.replace("postgresql+asyncpg://", "postgresql://")
+    return url
 
 def run_migrations_offline() -> None:
     url = get_url()
