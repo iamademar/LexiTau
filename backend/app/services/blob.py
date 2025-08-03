@@ -1,8 +1,9 @@
 import os
 import uuid
 from typing import Optional
+from datetime import datetime, timedelta
 from fastapi import UploadFile, HTTPException
-from azure.storage.blob import BlobServiceClient, ContentSettings
+from azure.storage.blob import BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions
 from azure.core.exceptions import AzureError
 import logging
 
@@ -276,6 +277,54 @@ class AzureBlobService:
             blob=blob_name
         )
         return blob_client.url
+    
+    def generate_sas_url(self, blob_url: str, expiry_hours: int = 1) -> str:
+        """
+        Generate a SAS (Shared Access Signature) URL for Document Intelligence access
+        
+        Args:
+            blob_url: The original blob URL
+            expiry_hours: Hours until the SAS token expires (default: 1 hour)
+            
+        Returns:
+            str: URL with SAS token that allows read access
+        """
+        try:
+            # Extract blob name from URL - more robust parsing
+            # URL format: https://account.blob.core.windows.net/container/blob/path
+            url_parts = blob_url.split('/')
+            container_index = url_parts.index(self.container_name)
+            blob_name = '/'.join(url_parts[container_index + 1:])
+            
+            if not blob_name:
+                raise ValueError(f"Could not extract blob name from URL: {blob_url}")
+            
+            # Get settings for account key
+            settings = get_settings()
+            
+            # Generate SAS token with read permissions
+            sas_token = generate_blob_sas(
+                account_name=settings.azure_storage_account_name,
+                container_name=self.container_name,
+                blob_name=blob_name,
+                account_key=settings.azure_storage_account_key,
+                permission=BlobSasPermissions(read=True),
+                expiry=datetime.utcnow() + timedelta(hours=expiry_hours)
+            )
+            
+            # Construct full URL with SAS token
+            sas_url = f"{blob_url}?{sas_token}"
+            
+            logger.info(f"Generated SAS URL for blob: {blob_name} (expires in {expiry_hours}h)")
+            
+            return sas_url
+            
+        except Exception as e:
+            logger.error(f"Failed to generate SAS token for {blob_url}: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to generate secure access token for file"
+            )
 
 
 # Global instance - will be initialized when first accessed
