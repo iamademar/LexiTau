@@ -1,12 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
 from sqlalchemy.orm import Session
-from typing import List
+from sqlalchemy import func
+from typing import List, Optional
 import logging
+import math
 
 from ..db import get_db
 from ..auth import get_current_user
 from ..models import User, Document
-from ..schemas.document import DocumentUploadResponse, DocumentUploadResult
+from ..schemas.document import DocumentUploadResponse, DocumentUploadResult, DocumentListResponse, DocumentResponse, PaginationMeta
 from ..services.blob import get_azure_blob_service
 from ..enums import FileType, DocumentType, DocumentStatus
 from ..tasks.ocr import dispatch_ocr_task
@@ -120,7 +122,7 @@ async def process_single_file(
         file_type = get_file_type_from_filename(file.filename)
         document_type = determine_document_type(file.filename)
         
-        # Create document record in database
+        # Create document record in database with PENDING status
         document = Document(
             user_id=user.id,
             business_id=user.business_id,
@@ -135,8 +137,14 @@ async def process_single_file(
         db.commit()
         db.refresh(document)
         
-        # Dispatch OCR processing task (placeholder for B4)
-        dispatch_ocr_task(document.id)
+        # Dispatch OCR processing task and update status to PROCESSING
+        task_id = dispatch_ocr_task(document.id)
+        
+        # Update status to PROCESSING after successful task dispatch
+        document.status = DocumentStatus.PROCESSING
+        db.commit()
+        
+        logger.info(f"Document {document.id} queued for processing with task ID: {task_id}")
         
         logger.info(f"Successfully uploaded document {document.id} for user {user.id}")
         
@@ -205,21 +213,75 @@ async def upload_documents(
     )
 
 
-@router.get("/", response_model=List[DocumentUploadResult])
-async def list_user_documents(
+@router.get("/", response_model=DocumentListResponse)
+async def list_business_documents(
+    page: int = Query(1, ge=1, description="Page number"),
+    per_page: int = Query(20, ge=1, le=100, description="Items per page"),
+    status: Optional[DocumentStatus] = Query(None, description="Filter by document status"),
+    document_type: Optional[DocumentType] = Query(None, description="Filter by document type"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """List all documents for the current user"""
-    documents = db.query(Document).filter(Document.user_id == current_user.id).all()
+    """
+    List all documents for the current business with filters and pagination
     
-    return [
-        DocumentUploadResult(
-            success=True,
+    Supports filtering by:
+    - status: PENDING, PROCESSING, COMPLETED, FAILED
+    - document_type: INVOICE, RECEIPT
+    
+    Returns paginated results with metadata.
+    """
+    # Base query for business documents
+    query = db.query(Document).filter(Document.business_id == current_user.business_id)
+    
+    # Apply filters
+    if status:
+        query = query.filter(Document.status == status)
+    
+    if document_type:
+        query = query.filter(Document.document_type == document_type)
+    
+    # Count total items for pagination
+    total_items = query.count()
+    
+    # Calculate pagination
+    total_pages = math.ceil(total_items / per_page) if total_items > 0 else 0
+    offset = (page - 1) * per_page
+    
+    # Apply pagination and ordering (newest first)
+    documents = query.order_by(Document.created_at.desc()).offset(offset).limit(per_page).all()
+    
+    # Create pagination metadata
+    pagination = PaginationMeta(
+        page=page,
+        per_page=per_page,
+        total_items=total_items,
+        total_pages=total_pages,
+        has_next=page < total_pages,
+        has_prev=page > 1
+    )
+    
+    # Convert to response format
+    document_responses = [
+        DocumentResponse(
+            id=doc.id,
             filename=doc.filename,
-            document_id=doc.id,
-            blob_url=doc.file_url,
-            file_type=doc.file_type
+            file_type=doc.file_type,
+            document_type=doc.document_type,
+            status=doc.status,
+            user_id=doc.user_id,
+            business_id=doc.business_id,
+            file_url=doc.file_url,
+            confidence_score=doc.confidence_score,
+            created_at=doc.created_at,
+            updated_at=doc.updated_at
         )
         for doc in documents
     ]
+    
+    logger.info(f"Retrieved {len(documents)} documents for business {current_user.business_id} (page {page}/{total_pages})")
+    
+    return DocumentListResponse(
+        documents=document_responses,
+        pagination=pagination
+    )

@@ -21,7 +21,7 @@ from app.main import app
 from app.models import User, Business, Document
 from app.auth import create_user_and_business, create_access_token
 from app.test_db import get_test_db, create_test_tables, drop_test_tables
-from app.core.settings import settings
+from app.core.settings import get_settings
 from app.services.blob import get_azure_blob_service
 
 
@@ -210,6 +210,7 @@ class TestRealAzureIntegration:
             # Verify service is properly initialized
             assert azure_service is not None
             assert azure_service.blob_service_client is not None
+            settings = get_settings()
             assert azure_service.container_name == settings.azure_blob_container_name
             
             print(f"✓ Azure Blob Service initialized successfully")

@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     azure_storage_connection_string: Optional[str] = None
     azure_blob_container_name: str = "documents"
     
+    # Redis/Celery settings
+    redis_url: str = "redis://localhost:6379/0"
+    
     # Application settings
     debug: bool = False
     environment: str = "development"
@@ -41,4 +44,6 @@ class Settings(BaseSettings):
 
 
 # Global settings instance
-settings = Settings()
+def get_settings() -> Settings:
+    """Get application settings instance"""
+    return Settings()

@@ -1,35 +1,25 @@
 """
 OCR Processing Tasks
 
-This module will contain Celery tasks for OCR processing.
-To be implemented in B4 phase.
+This module contains legacy placeholder functions.
+Actual Celery tasks have been moved to document_tasks.py
 """
 
 import uuid
 import logging
+from app.tasks.document_tasks import dispatch_ocr_task as _dispatch_ocr_task
 
 logger = logging.getLogger(__name__)
 
 
-def dispatch_ocr_task(document_id: uuid.UUID) -> None:
+def dispatch_ocr_task(document_id: uuid.UUID) -> str:
     """
-    Placeholder for OCR task dispatch
-    
-    This function will be replaced with actual Celery task in B4 phase.
-    For now, it just logs the document ID that would be processed.
+    Legacy function that now delegates to actual Celery implementation
     
     Args:
         document_id: UUID of the document to process
+        
+    Returns:
+        Task ID for tracking
     """
-    logger.info(f"OCR task would be dispatched for document {document_id}")
-    
-    # TODO: Replace with actual Celery task
-    # Example:
-    # process_document_ocr.delay(str(document_id))
-
-
-# TODO: Implement actual Celery task in B4
-# @celery_app.task(bind=True)
-# def process_document_ocr(self, document_id: str):
-#     """Process document OCR and update status"""
-#     pass
+    return _dispatch_ocr_task(document_id)

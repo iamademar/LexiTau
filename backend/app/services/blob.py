@@ -6,7 +6,7 @@ from azure.storage.blob import BlobServiceClient, ContentSettings
 from azure.core.exceptions import AzureError
 import logging
 
-from ..core.settings import settings
+from ..core.settings import get_settings
 from ..enums import FileType
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,7 @@ class AzureBlobService:
     def __init__(self):
         """Initialize Azure Blob Service with connection string from settings"""
         try:
+            settings = get_settings()
             logger.info(f"Initializing Azure Blob Service with account: {settings.azure_storage_account_name}")
             self.blob_service_client = BlobServiceClient.from_connection_string(
                 settings.azure_connection_string

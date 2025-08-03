@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from uuid import UUID
 from datetime import datetime
@@ -52,3 +52,25 @@ class DocumentResponse(DocumentBase):
 
     class Config:
         from_attributes = True
+
+
+class DocumentFilters(BaseModel):
+    """Filters for document listing"""
+    status: Optional[DocumentStatus] = None
+    document_type: Optional[DocumentType] = None
+    
+    
+class PaginationMeta(BaseModel):
+    """Pagination metadata"""
+    page: int = Field(ge=1, description="Current page number")
+    per_page: int = Field(ge=1, le=100, description="Items per page")
+    total_items: int = Field(ge=0, description="Total number of items")
+    total_pages: int = Field(ge=0, description="Total number of pages")
+    has_next: bool = Field(description="Whether there is a next page")
+    has_prev: bool = Field(description="Whether there is a previous page")
+
+
+class DocumentListResponse(BaseModel):
+    """Paginated response for document listing"""
+    documents: List[DocumentResponse]
+    pagination: PaginationMeta

@@ -11,6 +11,8 @@ pydantic==2.10.3
 pydantic-settings==2.6.1
 email-validator==2.2.0
 azure-storage-blob==12.26.0
+celery==5.4.0
+redis==5.2.1
 pytest==8.3.4
 pytest-asyncio==0.25.0
 httpx==0.28.1
