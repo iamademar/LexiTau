@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     # Redis/Celery settings
     redis_url: str = "redis://localhost:6379/0"
     
+    # Azure Document Intelligence settings
+    azure_document_intelligence_key_one: str
+    azure_document_intelligence_key_two: Optional[str] = None
+    azure_document_intelligence_region: str
+    azure_document_intelligence_endpoint: str
+    
     # Application settings
     debug: bool = False
     environment: str = "development"
