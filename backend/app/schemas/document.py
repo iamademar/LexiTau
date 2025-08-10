@@ -74,3 +74,45 @@ class DocumentListResponse(BaseModel):
     """Paginated response for document listing"""
     documents: List[DocumentResponse]
     pagination: PaginationMeta
+
+
+class ExtractedFieldResponse(BaseModel):
+    """Response schema for extracted fields"""
+    id: int
+    field_name: str
+    value: Optional[str] = None
+    confidence: Optional[float] = None
+    is_low_confidence: bool = Field(description="True if confidence < 0.7")
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    
+    class Config:
+        from_attributes = True
+
+
+class LineItemResponse(BaseModel):
+    """Response schema for line items"""
+    id: int
+    description: Optional[str] = None
+    quantity: Optional[float] = None
+    unit_price: Optional[float] = None
+    total: Optional[float] = None
+    confidence: Optional[float] = None
+    is_low_confidence: bool = Field(description="True if confidence < 0.7")
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    
+    class Config:
+        from_attributes = True
+
+
+class DocumentFieldsResponse(BaseModel):
+    """Response schema for document fields endpoint"""
+    document_id: UUID
+    document_info: DocumentResponse
+    extracted_fields: List[ExtractedFieldResponse]
+    line_items: List[LineItemResponse]
+    processing_status: DocumentStatus
+    overall_confidence: Optional[float] = None
+    fields_summary: dict = Field(description="Summary statistics for extracted fields")
+    line_items_summary: dict = Field(description="Summary statistics for line items")
