@@ -26,6 +26,7 @@ class User(Base):
     
     business = relationship("Business", back_populates="users")
     documents = relationship("Document", back_populates="user")
+    field_corrections = relationship("FieldCorrection", back_populates="corrected_by_user")
 
 class Document(Base):
     __tablename__ = "documents"
@@ -46,6 +47,7 @@ class Document(Base):
     business = relationship("Business")
     extracted_fields = relationship("ExtractedField", back_populates="document", cascade="all, delete-orphan")
     line_items = relationship("LineItem", back_populates="document", cascade="all, delete-orphan")
+    field_corrections = relationship("FieldCorrection", back_populates="document", cascade="all, delete-orphan")
 
 
 class ExtractedField(Base):
@@ -85,3 +87,24 @@ class LineItem(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     document = relationship("Document", back_populates="line_items")
+
+
+class FieldCorrection(Base):
+    """
+    Tracks user corrections to extracted field values.
+    Maintains audit trail of all field corrections made by users to improve
+    future OCR accuracy and provide data quality insights.
+    """
+    __tablename__ = "field_corrections"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False, index=True)
+    field_name = Column(String, nullable=False, index=True)  # Same as ExtractedField.field_name
+    original_value = Column(Text, nullable=True)  # Original extracted value
+    corrected_value = Column(Text, nullable=False)  # User-corrected value
+    corrected_by = Column(Integer, ForeignKey("users.id"), nullable=False)  # User who made the correction
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)  # When correction was made
+    
+    # Relationships
+    document = relationship("Document", back_populates="field_corrections")
+    corrected_by_user = relationship("User", back_populates="field_corrections")

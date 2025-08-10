@@ -116,3 +116,33 @@ class DocumentFieldsResponse(BaseModel):
     overall_confidence: Optional[float] = None
     fields_summary: dict = Field(description="Summary statistics for extracted fields")
     line_items_summary: dict = Field(description="Summary statistics for line items")
+
+
+class FieldCorrectionRequest(BaseModel):
+    """Single field correction request"""
+    field_name: str = Field(min_length=1, description="Name of the field to correct")
+    corrected_value: str = Field(description="The corrected value for the field")
+
+
+class FieldCorrectionsRequest(BaseModel):
+    """Request schema for field corrections"""
+    corrections: List[FieldCorrectionRequest] = Field(min_length=1, description="List of field corrections to apply")
+
+
+class FieldCorrectionResult(BaseModel):
+    """Result of a single field correction"""
+    field_name: str
+    success: bool
+    message: str
+    original_value: Optional[str] = None
+    corrected_value: str
+    was_new_field: bool = Field(description="True if field didn't exist and was created")
+
+
+class FieldCorrectionsResponse(BaseModel):
+    """Response schema for field corrections endpoint"""
+    document_id: UUID
+    corrections_applied: int
+    corrections_failed: int
+    results: List[FieldCorrectionResult]
+    updated_fields: List[ExtractedFieldResponse] = Field(description="All fields after corrections applied")
