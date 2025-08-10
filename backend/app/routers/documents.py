@@ -8,7 +8,7 @@ import math
 
 from ..db import get_db
 from ..auth import get_current_user
-from ..models import User, Document, ExtractedField, LineItem
+from ..models import User, Document, ExtractedField, LineItem, FieldCorrection
 from ..schemas.document import (
     DocumentUploadResponse, 
     DocumentUploadResult, 
@@ -17,7 +17,10 @@ from ..schemas.document import (
     PaginationMeta,
     DocumentFieldsResponse,
     ExtractedFieldResponse,
-    LineItemResponse
+    LineItemResponse,
+    FieldCorrectionsRequest,
+    FieldCorrectionsResponse,
+    FieldCorrectionResult
 )
 from ..services.blob import get_azure_blob_service
 from ..enums import FileType, DocumentType, DocumentStatus
@@ -484,4 +487,160 @@ async def get_document_fields(
         overall_confidence=document.confidence_score,
         fields_summary=fields_summary,
         line_items_summary=line_items_summary
+    )
+
+
+@router.post("/{document_id}/fields/correct", response_model=FieldCorrectionsResponse)
+async def correct_document_fields(
+    document_id: UUID,
+    corrections_request: FieldCorrectionsRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Submit corrections for extracted document fields.
+    
+    This endpoint allows users to correct field values that were incorrectly 
+    extracted during OCR processing. Each correction is logged for audit 
+    purposes and the extracted field is updated with the corrected value.
+    
+    Requirements:
+    - User must have access to the document (same business)
+    - Document must be in COMPLETED status
+    - At least one correction must be provided
+    
+    For each correction:
+    1. Log the correction in FieldCorrection table
+    2. Update or create the field in ExtractedField table
+    3. Track success/failure for each correction
+    
+    Returns updated field list and correction results.
+    """
+    # Validate user has access to document
+    document = db.query(Document).filter(
+        Document.id == document_id,
+        Document.business_id == current_user.business_id
+    ).first()
+    
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found or access denied"
+        )
+    
+    # Validate document is in COMPLETED state
+    if document.status != DocumentStatus.COMPLETED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot correct fields for document in {document.status.value} status. Document must be COMPLETED."
+        )
+    
+    correction_results = []
+    corrections_applied = 0
+    corrections_failed = 0
+    
+    # Process each correction
+    for correction_req in corrections_request.corrections:
+        try:
+            # Get existing field if it exists
+            existing_field = db.query(ExtractedField).filter(
+                ExtractedField.document_id == document_id,
+                ExtractedField.field_name == correction_req.field_name
+            ).first()
+            
+            original_value = existing_field.value if existing_field else None
+            was_new_field = existing_field is None
+            
+            # Log the correction
+            field_correction = FieldCorrection(
+                document_id=document_id,
+                field_name=correction_req.field_name,
+                original_value=original_value,
+                corrected_value=correction_req.corrected_value,
+                corrected_by=current_user.id
+            )
+            db.add(field_correction)
+            
+            # Update or create the extracted field
+            if existing_field:
+                existing_field.value = correction_req.corrected_value
+                existing_field.updated_at = func.now()
+                message = f"Field '{correction_req.field_name}' updated successfully"
+            else:
+                # Create new field for correction
+                new_field = ExtractedField(
+                    document_id=document_id,
+                    field_name=correction_req.field_name,
+                    value=correction_req.corrected_value,
+                    confidence=None  # User-corrected fields have no confidence score
+                )
+                db.add(new_field)
+                message = f"New field '{correction_req.field_name}' created successfully"
+            
+            # Record successful correction
+            correction_results.append(FieldCorrectionResult(
+                field_name=correction_req.field_name,
+                success=True,
+                message=message,
+                original_value=original_value,
+                corrected_value=correction_req.corrected_value,
+                was_new_field=was_new_field
+            ))
+            
+            corrections_applied += 1
+            
+        except Exception as e:
+            logger.error(f"Failed to process correction for field '{correction_req.field_name}': {str(e)}")
+            
+            # Record failed correction
+            correction_results.append(FieldCorrectionResult(
+                field_name=correction_req.field_name,
+                success=False,
+                message=f"Failed to correct field: {str(e)}",
+                original_value=None,
+                corrected_value=correction_req.corrected_value,
+                was_new_field=False
+            ))
+            
+            corrections_failed += 1
+    
+    # Commit all changes if any corrections were successful
+    if corrections_applied > 0:
+        try:
+            db.commit()
+            logger.info(f"Applied {corrections_applied} corrections to document {document_id}")
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to commit corrections for document {document_id}: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to save corrections to database"
+            )
+    
+    # Get updated fields after corrections
+    updated_fields = db.query(ExtractedField).filter(
+        ExtractedField.document_id == document_id
+    ).order_by(ExtractedField.field_name).all()
+    
+    field_responses = [
+        ExtractedFieldResponse(
+            id=field.id,
+            field_name=field.field_name,
+            value=field.value,
+            confidence=field.confidence,
+            is_low_confidence=is_low_confidence(field.confidence),
+            created_at=field.created_at,
+            updated_at=field.updated_at
+        )
+        for field in updated_fields
+    ]
+    
+    logger.info(f"Field corrections completed for document {document_id}: {corrections_applied} applied, {corrections_failed} failed")
+    
+    return FieldCorrectionsResponse(
+        document_id=document_id,
+        corrections_applied=corrections_applied,
+        corrections_failed=corrections_failed,
+        results=correction_results,
+        updated_fields=field_responses
     )
