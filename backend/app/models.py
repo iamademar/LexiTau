@@ -25,7 +25,7 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     business = relationship("Business", back_populates="users")
-    documents = relationship("Document", back_populates="user")
+    documents = relationship("Document", back_populates="user", foreign_keys="Document.user_id")
     field_corrections = relationship("FieldCorrection", back_populates="corrected_by_user")
 
 class Document(Base):
@@ -40,10 +40,13 @@ class Document(Base):
     document_type = Column(Enum(DocumentType), nullable=False)
     status = Column(Enum(DocumentStatus), nullable=False, default=DocumentStatus.PENDING)
     confidence_score = Column(Float, nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
-    user = relationship("User", back_populates="documents")
+    user = relationship("User", back_populates="documents", foreign_keys=[user_id])
+    reviewer = relationship("User", foreign_keys=[reviewed_by], post_update=True)
     business = relationship("Business")
     extracted_fields = relationship("ExtractedField", back_populates="document", cascade="all, delete-orphan")
     line_items = relationship("LineItem", back_populates="document", cascade="all, delete-orphan")
