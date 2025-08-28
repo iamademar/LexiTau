@@ -4,7 +4,7 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import uuid
 from .db import Base
-from .enums import FileType, DocumentType, DocumentStatus
+from .enums import FileType, DocumentType, DocumentStatus, DocumentClassification
 
 class Business(Base):
     __tablename__ = "businesses"
@@ -34,10 +34,14 @@ class Document(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     business_id = Column(Integer, ForeignKey("businesses.id"), nullable=False)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+    category_id = Column(Integer, ForeignKey("categories.id"), nullable=True, index=True)
     filename = Column(String, nullable=False)
     file_url = Column(String, nullable=False)  # Azure Blob URL
     file_type = Column(Enum(FileType), nullable=False)
     document_type = Column(Enum(DocumentType), nullable=False)
+    classification = Column(Enum(DocumentClassification), nullable=False, index=True)
     status = Column(Enum(DocumentStatus), nullable=False, default=DocumentStatus.PENDING)
     confidence_score = Column(Float, nullable=True)
     reviewed_at = Column(DateTime(timezone=True), nullable=True)
@@ -48,6 +52,9 @@ class Document(Base):
     user = relationship("User", back_populates="documents", foreign_keys=[user_id])
     reviewer = relationship("User", foreign_keys=[reviewed_by], post_update=True)
     business = relationship("Business")
+    client = relationship("Client")
+    project = relationship("Project")
+    category = relationship("Category")
     extracted_fields = relationship("ExtractedField", back_populates="document", cascade="all, delete-orphan")
     line_items = relationship("LineItem", back_populates="document", cascade="all, delete-orphan")
     field_corrections = relationship("FieldCorrection", back_populates="document", cascade="all, delete-orphan")
@@ -111,3 +118,45 @@ class FieldCorrection(Base):
     # Relationships
     document = relationship("Document", back_populates="field_corrections")
     corrected_by_user = relationship("User", back_populates="field_corrections")
+
+
+class Client(Base):
+    """
+    Represents clients that businesses work with.
+    Each client is associated with a specific business for multi-tenant isolation.
+    """
+    __tablename__ = "clients"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    business_id = Column(Integer, ForeignKey("businesses.id"), nullable=False, index=True)
+    name = Column(String, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    business = relationship("Business")
+
+
+class Project(Base):
+    """
+    Represents projects that businesses work on.
+    Each project is associated with a specific business for multi-tenant isolation.
+    """
+    __tablename__ = "projects"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    business_id = Column(Integer, ForeignKey("businesses.id"), nullable=False, index=True)
+    name = Column(String, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    business = relationship("Business")
+
+
+class Category(Base):
+    """
+    Represents expense/revenue categories for document classification.
+    Categories are global and shared across all businesses.
+    """
+    __tablename__ = "categories"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False, unique=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

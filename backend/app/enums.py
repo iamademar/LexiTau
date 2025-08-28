@@ -14,3 +14,7 @@ class DocumentStatus(str, Enum):
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+
+class DocumentClassification(str, Enum):
+    REVENUE = "REVENUE"
+    EXPENSE = "EXPENSE"

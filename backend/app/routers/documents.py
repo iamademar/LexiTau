@@ -27,7 +27,7 @@ from ..schemas.document import (
     MarkReviewedResponse
 )
 from ..services.blob import get_azure_blob_service
-from ..enums import FileType, DocumentType, DocumentStatus
+from ..enums import FileType, DocumentType, DocumentStatus, DocumentClassification
 from ..tasks.ocr import dispatch_ocr_task
 
 logger = logging.getLogger(__name__)
@@ -97,6 +97,21 @@ def get_file_type_from_filename(filename: str) -> FileType:
         raise ValueError(f"Unsupported file extension: {extension}")
 
 
+def determine_document_classification(document_type: DocumentType) -> DocumentClassification:
+    """
+    Automatically classify document based on document type:
+    - INVOICE → REVENUE 
+    - RECEIPT → EXPENSE
+    """
+    if document_type == DocumentType.INVOICE:
+        return DocumentClassification.REVENUE
+    elif document_type == DocumentType.RECEIPT:
+        return DocumentClassification.EXPENSE
+    else:
+        # Default to EXPENSE if unknown type
+        return DocumentClassification.EXPENSE
+
+
 async def process_single_file(
     file: UploadFile, 
     user: User, 
@@ -138,6 +153,7 @@ async def process_single_file(
         # Determine file and document types
         file_type = get_file_type_from_filename(file.filename)
         document_type = determine_document_type(file.filename)
+        classification = determine_document_classification(document_type)
         
         # Create document record in database with PENDING status
         document = Document(
@@ -147,6 +163,7 @@ async def process_single_file(
             file_url=blob_url,
             file_type=file_type,
             document_type=document_type,
+            classification=classification,
             status=DocumentStatus.PENDING
         )
         
