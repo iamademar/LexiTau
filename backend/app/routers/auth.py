@@ -11,8 +11,8 @@ from ..auth import (
     verify_token,
     ACCESS_TOKEN_EXPIRE_MINUTES
 )
-from ..models import User
-from ..schemas.auth import (
+from .. import models
+from ..schemas import (
     SignupRequest, 
     LoginRequest, 
     SignupResponse, 
@@ -32,7 +32,7 @@ async def signup(
     """Create a new user and business account."""
     try:
         # Check if user already exists
-        existing_user = db.query(User).filter(User.email == request.email).first()
+        existing_user = db.query(models.User).filter(models.User.email == request.email).first()
         if existing_user:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -106,7 +106,7 @@ async def login(
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
-) -> User:
+) -> models.User:
     """Get current authenticated user."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -122,7 +122,7 @@ async def get_current_user(
     if email is None:
         raise credentials_exception
     
-    user = db.query(User).filter(User.email == email).first()
+    user = db.query(models.User).filter(models.User.email == email).first()
     if user is None:
         raise credentials_exception
     
@@ -130,7 +130,7 @@ async def get_current_user(
 
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_info(
-    current_user: User = Depends(get_current_user)
+    current_user: models.User = Depends(get_current_user)
 ):
     """Get current user information."""
     return UserResponse.model_validate(current_user)

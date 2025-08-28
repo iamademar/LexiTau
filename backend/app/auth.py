@@ -5,7 +5,7 @@ from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from .models import User, Business
+from . import models
 from .db import get_db
 
 # Configuration
@@ -42,25 +42,25 @@ def verify_token(token: str) -> Optional[dict]:
     except JWTError:
         return None
 
-def authenticate_user(db: Session, email: str, password: str) -> Optional[User]:
+def authenticate_user(db: Session, email: str, password: str) -> Optional[models.User]:
     """Authenticate user with email and password."""
-    user = db.query(User).filter(User.email == email).first()
+    user = db.query(models.User).filter(models.User.email == email).first()
     if not user:
         return None
     if not verify_password(password, user.password_hash):
         return None
     return user
 
-def create_user_and_business(db: Session, email: str, password: str, business_name: str) -> User:
+def create_user_and_business(db: Session, email: str, password: str, business_name: str) -> models.User:
     """Create a new business and user."""
     # Create business first
-    business = Business(name=business_name)
+    business = models.Business(name=business_name)
     db.add(business)
     db.flush()  # Get the business ID without committing
     
     # Create user
     hashed_password = get_password_hash(password)
-    user = User(
+    user = models.User(
         email=email,
         password_hash=hashed_password,
         business_id=business.id
@@ -79,7 +79,7 @@ security = HTTPBearer()
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
-) -> User:
+) -> models.User:
     """Get current authenticated user from JWT token"""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -99,7 +99,7 @@ def get_current_user(
     except JWTError:
         raise credentials_exception
     
-    user = db.query(User).filter(User.email == email).first()
+    user = db.query(models.User).filter(models.User.email == email).first()
     if user is None:
         raise credentials_exception
     

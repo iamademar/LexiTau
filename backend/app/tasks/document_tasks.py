@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.celery import celery_app
 from app.db import get_db
-from app.models import Document, ExtractedField, LineItem
+from app import models
 from app.enums import DocumentStatus, DocumentType
 from app.services.azure_form_recognizer import get_azure_form_recognizer_client, DocumentExtractionError
 
@@ -39,7 +39,7 @@ def process_document_ocr(self, document_id: str) -> dict:
         db = next(get_db())
         
         # 1. Fetch document from database
-        document = db.query(Document).filter(Document.id == document_id).first()
+        document = db.query(models.Document).filter(models.Document.id == document_id).first()
         if not document:
             raise ValueError(f"Document {document_id} not found")
         
@@ -185,7 +185,7 @@ def dispatch_classification_task(document_id: uuid.UUID) -> str:
 
 # Helper functions for OCR processing
 
-def _save_extracted_fields(db: Session, document: Document, fields: List[Dict[str, Any]]) -> int:
+def _save_extracted_fields(db: Session, document: models.Document, fields: List[Dict[str, Any]]) -> int:
     """
     Save extracted fields to database
     
@@ -202,7 +202,7 @@ def _save_extracted_fields(db: Session, document: Document, fields: List[Dict[st
     for field_data in fields:
         try:
             # Create ExtractedField instance
-            extracted_field = ExtractedField(
+            extracted_field = models.ExtractedField(
                 document_id=document.id,
                 field_name=field_data["field_name"],
                 value=field_data["value"],
@@ -224,7 +224,7 @@ def _save_extracted_fields(db: Session, document: Document, fields: List[Dict[st
     return fields_saved
 
 
-def _save_line_items(db: Session, document: Document, line_items: List[Dict[str, Any]]) -> int:
+def _save_line_items(db: Session, document: models.Document, line_items: List[Dict[str, Any]]) -> int:
     """
     Save line items to database
     
@@ -241,7 +241,7 @@ def _save_line_items(db: Session, document: Document, line_items: List[Dict[str,
     for item_data in line_items:
         try:
             # Create LineItem instance
-            line_item = LineItem(
+            line_item = models.LineItem(
                 document_id=document.id,
                 description=item_data.get("description"),
                 quantity=item_data.get("quantity"),
@@ -326,7 +326,7 @@ def _update_document_status_failed(db: Session, document_id: str, error_message:
         return
     
     try:
-        document = db.query(Document).filter(Document.id == document_id).first()
+        document = db.query(models.Document).filter(models.Document.id == document_id).first()
         if document:
             document.status = DocumentStatus.FAILED
             document.confidence_score = 0.0

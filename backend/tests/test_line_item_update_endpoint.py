@@ -15,7 +15,7 @@ from app.enums import DocumentStatus, DocumentType, FileType
 from app.auth import create_access_token, create_user_and_business
 from app.test_db import get_test_db, create_test_tables, drop_test_tables
 from app.db import get_db
-from app.schemas.document import LineItemUpdateRequest
+from app.schemas import LineItemUpdateRequest
 
 
 client = TestClient(app)
