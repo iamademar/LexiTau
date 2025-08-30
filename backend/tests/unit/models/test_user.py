@@ -2,19 +2,6 @@ import pytest
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from app.models import User, Business
-from app.test_db import engine, TestingSessionLocal, create_test_tables, drop_test_tables
-
-
-@pytest.fixture(scope="function")
-def test_db():
-    create_test_tables()
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-        drop_test_tables()
-
 
 class TestUser:
     def test_create_user(self, test_db: Session):
@@ -92,44 +79,35 @@ class TestUser:
         assert user.business.id == business.id
 
     def test_required_fields(self, test_db: Session):
+        # Arrange once
         business = Business(name="Test Business")
         test_db.add(business)
-        test_db.commit()
+        test_db.flush()      # write PK without committing the outer test txn
         test_db.refresh(business)
-        
-        # Test missing email
-        with pytest.raises(IntegrityError):
-            user = User(
-                email=None,
-                password_hash="hashed_password",
-                business_id=business.id
-            )
-            test_db.add(user)
-            test_db.commit()
 
-        test_db.rollback()
-        
-        # Test missing password_hash
+        # 1) Missing email
         with pytest.raises(IntegrityError):
-            user = User(
-                email="test@example.com",
-                password_hash=None,
-                business_id=business.id
-            )
-            test_db.add(user)
-            test_db.commit()
+            with test_db.begin_nested():     # SAVEPOINT
+                user = User(email=None, password_hash="hashed_password",
+                            business_id=business.id)
+                test_db.add(user)
+                test_db.flush()              # raises here
 
-        test_db.rollback()
-        
-        # Test missing business_id
+        # 2) Missing password_hash
         with pytest.raises(IntegrityError):
-            user = User(
-                email="test@example.com",
-                password_hash="hashed_password",
-                business_id=None
-            )
-            test_db.add(user)
-            test_db.commit()
+            with test_db.begin_nested():
+                user = User(email="test@example.com", password_hash=None,
+                            business_id=business.id)
+                test_db.add(user)
+                test_db.flush()
+
+        # 3) Missing business_id
+        with pytest.raises(IntegrityError):
+            with test_db.begin_nested():
+                user = User(email="test@example.com", password_hash="hashed_password",
+                            business_id=None)
+                test_db.add(user)
+                test_db.flush()
 
     def test_user_import_and_instantiation(self):
         """Test that User model can be imported and instantiated with minimal fields (no DB commit)"""

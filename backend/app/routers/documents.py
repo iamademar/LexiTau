@@ -6,8 +6,7 @@ from uuid import UUID
 import logging
 import math
 
-from ..db import get_db
-from ..auth import get_current_user
+from ..dependencies import get_db, get_current_user
 from .. import models
 from ..schemas import (
     DocumentUploadResponse, 
@@ -26,179 +25,17 @@ from ..schemas import (
     MarkReviewedRequest,
     MarkReviewedResponse
 )
-from ..services.blob import get_azure_blob_service
 from ..enums import FileType, DocumentType, DocumentStatus, DocumentClassification
-from ..tasks.ocr import dispatch_ocr_task
+from ..services.document_service import (
+    DocumentProcessingService, 
+    DocumentQueryService,
+    DocumentManagementService
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
-# File size limit: 10MB
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB in bytes
-
-
-def validate_file_size(file: UploadFile) -> bool:
-    """Validate file size is under the limit"""
-    if not hasattr(file.file, 'seek') or not hasattr(file.file, 'tell'):
-        return True  # Can't check size, allow it
-    
-    # Get current position
-    current_pos = file.file.tell()
-    
-    # Seek to end to get file size
-    file.file.seek(0, 2)
-    file_size = file.file.tell()
-    
-    # Reset to original position
-    file.file.seek(current_pos)
-    
-    return file_size <= MAX_FILE_SIZE
-
-
-def get_file_size(file: UploadFile) -> int:
-    """Get file size in bytes"""
-    if not hasattr(file.file, 'seek') or not hasattr(file.file, 'tell'):
-        return 0
-    
-    current_pos = file.file.tell()
-    file.file.seek(0, 2)
-    file_size = file.file.tell()
-    file.file.seek(current_pos)
-    
-    return file_size
-
-
-def determine_document_type(filename: str) -> DocumentType:
-    """Determine document type based on filename (placeholder logic)"""
-    filename_lower = filename.lower()
-    
-    if any(keyword in filename_lower for keyword in ['invoice', 'bill', 'inv']):
-        return DocumentType.INVOICE
-    elif any(keyword in filename_lower for keyword in ['receipt', 'rec']):
-        return DocumentType.RECEIPT
-    else:
-        # Default to invoice if we can't determine
-        return DocumentType.INVOICE
-
-
-def get_file_type_from_filename(filename: str) -> FileType:
-    """Get FileType enum from filename extension"""
-    import os
-    extension = os.path.splitext(filename)[1].lower()
-    
-    if extension == ".pdf":
-        return FileType.PDF
-    elif extension in [".jpg", ".jpeg"]:
-        return FileType.JPG
-    elif extension == ".png":
-        return FileType.PNG
-    else:
-        raise ValueError(f"Unsupported file extension: {extension}")
-
-
-def determine_document_classification(document_type: DocumentType) -> DocumentClassification:
-    """
-    Automatically classify document based on document type:
-    - INVOICE → REVENUE 
-    - RECEIPT → EXPENSE
-    """
-    if document_type == DocumentType.INVOICE:
-        return DocumentClassification.REVENUE
-    elif document_type == DocumentType.RECEIPT:
-        return DocumentClassification.EXPENSE
-    else:
-        # Default to EXPENSE if unknown type
-        return DocumentClassification.EXPENSE
-
-
-async def process_single_file(
-    file: UploadFile, 
-    user: models.User, 
-    db: Session
-) -> DocumentUploadResult:
-    """Process a single file upload"""
-    try:
-        # Basic validation
-        if not file.filename:
-            return DocumentUploadResult(
-                success=False,
-                filename=file.filename or "unknown",
-                error_message="Filename is required"
-            )
-        
-        # Validate file size
-        file_size = get_file_size(file)
-        if not validate_file_size(file):
-            return DocumentUploadResult(
-                success=False,
-                filename=file.filename,
-                error_message=f"File size exceeds limit of {MAX_FILE_SIZE / (1024*1024):.1f}MB",
-                file_size=file_size
-            )
-        
-        # Validate file type
-        azure_service = get_azure_blob_service()
-        if not azure_service.validate_file_type(file):
-            return DocumentUploadResult(
-                success=False,
-                filename=file.filename,
-                error_message="Invalid file type. Only PDF, JPG, and PNG files are allowed.",
-                file_size=file_size
-            )
-        
-        # Upload to Azure Blob Storage
-        blob_url = await azure_service.upload_file(file, user.id)
-        
-        # Determine file and document types
-        file_type = get_file_type_from_filename(file.filename)
-        document_type = determine_document_type(file.filename)
-        classification = determine_document_classification(document_type)
-        
-        # Create document record in database with PENDING status
-        document = models.Document(
-            user_id=user.id,
-            business_id=user.business_id,
-            filename=file.filename,
-            file_url=blob_url,
-            file_type=file_type,
-            document_type=document_type,
-            classification=classification,
-            status=DocumentStatus.PENDING
-        )
-        
-        db.add(document)
-        db.commit()
-        db.refresh(document)
-        
-        # Dispatch OCR processing task and update status to PROCESSING
-        task_id = dispatch_ocr_task(document.id)
-        
-        # Update status to PROCESSING after successful task dispatch
-        document.status = DocumentStatus.PROCESSING
-        db.commit()
-        
-        logger.info(f"models.Document {document.id} queued for processing with task ID: {task_id}")
-        
-        logger.info(f"Successfully uploaded document {document.id} for user {user.id}")
-        
-        return DocumentUploadResult(
-            success=True,
-            filename=file.filename,
-            document_id=document.id,
-            blob_url=blob_url,
-            file_size=file_size,
-            file_type=file_type
-        )
-        
-    except Exception as e:
-        logger.error(f"Error processing file {file.filename}: {str(e)}")
-        return DocumentUploadResult(
-            success=False,
-            filename=file.filename or "unknown",
-            error_message=f"Upload failed: {str(e)}",
-            file_size=get_file_size(file) if file else 0
-        )
 
 
 @router.post("/upload", response_model=DocumentUploadResponse)
@@ -232,7 +69,7 @@ async def upload_documents(
     # Process each file
     results = []
     for file in files:
-        result = await process_single_file(file, current_user, db)
+        result = await DocumentProcessingService.process_single_file(file, current_user, db)
         results.append(result)
     
     # Calculate summary statistics
@@ -267,68 +104,14 @@ async def list_business_documents(
     
     Returns paginated results with metadata.
     """
-    # Base query for business documents
-    query = db.query(models.Document).filter(models.Document.business_id == current_user.business_id)
-    
-    # Apply filters
-    if status:
-        query = query.filter(models.Document.status == status)
-    
-    if document_type:
-        query = query.filter(models.Document.document_type == document_type)
-    
-    if is_reviewed is not None:
-        if is_reviewed:
-            query = query.filter(models.Document.reviewed_at.is_not(None))
-        else:
-            query = query.filter(models.Document.reviewed_at.is_(None))
-    
-    # Count total items for pagination
-    total_items = query.count()
-    
-    # Calculate pagination
-    total_pages = math.ceil(total_items / per_page) if total_items > 0 else 0
-    offset = (page - 1) * per_page
-    
-    # Apply pagination and ordering (newest first)
-    documents = query.order_by(models.Document.created_at.desc()).offset(offset).limit(per_page).all()
-    
-    # Create pagination metadata
-    pagination = PaginationMeta(
+    return DocumentQueryService.list_business_documents(
+        db=db,
+        business_id=current_user.business_id,
         page=page,
         per_page=per_page,
-        total_items=total_items,
-        total_pages=total_pages,
-        has_next=page < total_pages,
-        has_prev=page > 1
-    )
-    
-    # Convert to response format
-    document_responses = [
-        models.DocumentResponse(
-            id=doc.id,
-            filename=doc.filename,
-            file_type=doc.file_type,
-            document_type=doc.document_type,
-            status=doc.status,
-            user_id=doc.user_id,
-            business_id=doc.business_id,
-            file_url=doc.file_url,
-            confidence_score=doc.confidence_score,
-            reviewed_at=doc.reviewed_at,
-            reviewed_by=doc.reviewed_by,
-            is_reviewed=doc.reviewed_at is not None,
-            created_at=doc.created_at,
-            updated_at=doc.updated_at
-        )
-        for doc in documents
-    ]
-    
-    logger.info(f"Retrieved {len(documents)} documents for business {current_user.business_id} (page {page}/{total_pages})")
-    
-    return DocumentListResponse(
-        documents=document_responses,
-        pagination=pagination
+        status=status,
+        document_type=document_type,
+        is_reviewed=is_reviewed
     )
 
 
@@ -552,7 +335,7 @@ async def get_document_fields(
     ]
     
     # Create document info response
-    document_info = models.DocumentResponse(
+    document_info = DocumentResponse(
         id=document.id,
         filename=document.filename,
         file_type=document.file_type,
@@ -675,7 +458,7 @@ async def correct_document_fields(
                 message = f"New field '{correction_req.field_name}' created successfully"
             
             # Record successful correction
-            correction_results.append(models.FieldCorrectionResult(
+            correction_results.append(FieldCorrectionResult(
                 field_name=correction_req.field_name,
                 success=True,
                 message=message,
@@ -690,7 +473,7 @@ async def correct_document_fields(
             logger.error(f"Failed to process correction for field '{correction_req.field_name}': {str(e)}")
             
             # Record failed correction
-            correction_results.append(models.FieldCorrectionResult(
+            correction_results.append(FieldCorrectionResult(
                 field_name=correction_req.field_name,
                 success=False,
                 message=f"Failed to correct field: {str(e)}",
@@ -871,7 +654,7 @@ async def mark_document_reviewed(
     
     Requirements:
     - User must have access to the document (same business)
-    - models.Document must be in COMPLETED status for review
+    - Document must be in COMPLETED status for review
     - Can be marked as reviewed multiple times (updates timestamp and reviewer)
     
     Note: Marking as reviewed does not prevent future edits to the document.
@@ -879,50 +662,9 @@ async def mark_document_reviewed(
     
     Returns the review timestamp and reviewer information.
     """
-    # Validate user has access to document
-    document = db.query(models.Document).filter(
-        models.Document.id == document_id,
-        models.Document.business_id == current_user.business_id
-    ).first()
-    
-    if not document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="models.Document not found or access denied"
-        )
-    
-    # Validate document is in COMPLETED state
-    if document.status != DocumentStatus.COMPLETED:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot mark document in {document.status.value} status as reviewed. models.Document must be COMPLETED."
-        )
-    
-    try:
-        # Mark document as reviewed
-        review_timestamp = func.now()
-        document.reviewed_at = review_timestamp
-        document.reviewed_by = current_user.id
-        document.updated_at = review_timestamp
-        
-        # Commit the changes
-        db.commit()
-        db.refresh(document)
-        
-        logger.info(f"models.Document {document_id} marked as reviewed by user {current_user.id}")
-        
-        return MarkReviewedResponse(
-            success=True,
-            message="models.Document marked as reviewed successfully",
-            document_id=document_id,
-            reviewed_at=document.reviewed_at,
-            reviewed_by=document.reviewed_by
-        )
-        
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Failed to mark document {document_id} as reviewed: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to mark document as reviewed"
-        )
+    return DocumentManagementService.mark_document_reviewed(
+        db=db,
+        document_id=document_id,
+        user_id=current_user.id,
+        business_id=current_user.business_id
+    )

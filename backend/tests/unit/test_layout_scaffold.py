@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
 def test_layer_imports():
     """Test that all layer packages can be imported successfully."""
     import app.routers

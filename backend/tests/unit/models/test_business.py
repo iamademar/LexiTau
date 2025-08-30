@@ -1,19 +1,11 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+
 import pytest
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from app.models import Business, User
-from app.test_db import engine, TestingSessionLocal, create_test_tables, drop_test_tables
-
-
-@pytest.fixture(scope="function")
-def test_db():
-    create_test_tables()
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-        drop_test_tables()
 
 
 class TestBusiness:
@@ -110,3 +102,4 @@ class TestBusiness:
         
         assert business.name == "Test Business LLC"
         assert business.__class__.__name__ == "Business"
+
