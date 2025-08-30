@@ -3,7 +3,7 @@ from typing import List, Optional
 from uuid import UUID
 from datetime import datetime
 from decimal import Decimal
-from ..enums import FileType, DocumentType, DocumentStatus
+from ..enums import FileType, DocumentType, DocumentStatus, DocumentClassification
 
 
 class DocumentUploadResult(BaseModel):
@@ -62,7 +62,11 @@ class DocumentFilters(BaseModel):
     """Filters for document listing"""
     status: Optional[DocumentStatus] = None
     document_type: Optional[DocumentType] = None
+    classification: Optional[DocumentClassification] = Field(None, description="Filter by document classification (revenue or expense)")
     is_reviewed: Optional[bool] = Field(None, description="Filter by review status (True=reviewed, False=not reviewed)")
+    client_id: Optional[int] = Field(None, description="Filter by client ID")
+    project_id: Optional[int] = Field(None, description="Filter by project ID")  
+    category_id: Optional[int] = Field(None, description="Filter by category ID")
     
     
 class PaginationMeta(BaseModel):
@@ -184,3 +188,21 @@ class MarkReviewedResponse(BaseModel):
     document_id: UUID
     reviewed_at: datetime
     reviewed_by: int = Field(description="User ID who marked document as reviewed")
+
+
+class DocumentTagRequest(BaseModel):
+    """Request schema for tagging a document"""
+    client_id: Optional[int] = Field(None, description="ID of client to associate with document")
+    project_id: Optional[int] = Field(None, description="ID of project to associate with document")  
+    category_id: Optional[int] = Field(None, description="ID of category to associate with document")
+
+
+class DocumentTagResponse(BaseModel):
+    """Response schema for document tagging endpoint"""
+    success: bool
+    message: str
+    document_id: UUID
+    client_id: Optional[int] = None
+    project_id: Optional[int] = None
+    category_id: Optional[int] = None
+    updated_at: datetime

@@ -29,7 +29,9 @@ from .document import (
     LineItemUpdateRequest,
     LineItemUpdateResponse,
     MarkReviewedRequest,
-    MarkReviewedResponse
+    MarkReviewedResponse,
+    DocumentTagRequest,
+    DocumentTagResponse
 )
 
 # User schemas
@@ -37,6 +39,26 @@ from .user import UserBase
 
 # Item schemas  
 from .item import ItemBase
+
+# Client schemas
+from .client import (
+    ClientBase,
+    ClientCreate,
+    Client
+)
+
+# Project schemas
+from .project import (
+    ProjectBase,
+    ProjectCreate,
+    Project
+)
+
+# Category schemas
+from .category import (
+    CategoryBase,
+    Category
+)
 
 # Make all schemas available at package level
 __all__ = [
@@ -68,8 +90,21 @@ __all__ = [
     "LineItemUpdateResponse",
     "MarkReviewedRequest",
     "MarkReviewedResponse",
+    "DocumentTagRequest",
+    "DocumentTagResponse",
     # User
     "UserBase",
     # Item
-    "ItemBase"
+    "ItemBase",
+    # Client
+    "ClientBase",
+    "ClientCreate",
+    "Client",
+    # Project
+    "ProjectBase",
+    "ProjectCreate",
+    "Project",
+    # Category
+    "CategoryBase",
+    "Category"
 ]

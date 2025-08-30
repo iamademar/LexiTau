@@ -41,25 +41,50 @@ alwaysApply: true
 - When asked to create new migration, use: `docker-compose exec fastapi alembic revision --autogenerate -m "description"`
 
 ### Testing Commands
-- **Default (SQLite, fast unit tests):**
-  `docker compose run --no-deps --rm fastapi pytest -q`
 
-- **Verbose (SQLite):**
-  `docker compose run --no-deps --rm fastapi pytest -vv`
+- **Default (Unit tests only, SQLite in-memory, fast)**  
+  ```bash
+  docker compose run --no-deps --rm fastapi pytest -q -m "not integration"
+  ```
 
-- **Parallel (SQLite, multi-core):**
-  `docker compose run --no-deps --rm fastapi pytest -q -n auto`
+Runs only **SQLite-based unit tests**. This should be your default for quick feedback.
 
-- **Integration tests only (Postgres required):**
-  `docker compose run --no-deps --rm fastapi pytest -q -m integration`
-  # or
-  `docker compose run --no-deps --rm fastapi pytest -q tests/integration`
+* **Verbose (Unit, SQLite)**
 
-- **All tests (SQLite + Postgres):**
-  `docker compose run --no-deps --rm fastapi pytest -q -m ""`
+  ```bash
+  docker compose run --no-deps --rm fastapi pytest -vv -m "not integration"
+  ```
 
-⚡️ Most tests run on SQLite by default.  
-If a test fails on SQLite because of Postgres-only features (UUID, ENUM, `func.now()`, DECIMAL precision, migrations, etc.), move it to `tests/integration/` or mark it with `@pytest.mark.integration`.
+* **Parallel (Unit, SQLite only)**
+
+  ```bash
+  docker compose run --no-deps --rm fastapi pytest -q -n auto -m "not integration"
+  ```
+
+  ⚠️ Do **not** use with Postgres integration tests (schema race conditions).
+
+* **Integration tests only (Postgres required)**
+
+  ```bash
+  docker compose run --no-deps --rm fastapi pytest -q -m integration
+  ```
+
+  Uses the `postgres_test` container (port **5433**) and `TEST_DATABASE_URL`.
+  Run these for UUID, ENUM, migrations, or other Postgres-only features.
+
+* **All tests (Unit + Integration)**
+
+  ```bash
+  docker compose run --no-deps --rm fastapi pytest -q -m ""
+  ```
+
+---
+
+⚡️ **Guidelines**
+
+* Default workflow: **run unit tests first** (fast).
+* If a test fails on SQLite because of Postgres-only features (UUID, ENUM, `func.now()`, DECIMAL precision, migrations, etc.), move it to `tests/integration/` or mark with `@pytest.mark.integration`.
+* CI runs with Postgres enabled, so both unit + integration tests will execute.
 
 ### Development Commands
 - When asked to install Python packages, access the container first: `docker-compose exec fastapi bash` then run pip commands
@@ -102,130 +127,222 @@ alwaysApply: true
 - Use concise, one-line syntax for simple conditional statements (e.g., if condition: do_something())
 
 ## File Structure: Layer-Based Organization
-This structure separates code by layer (routers, models, schemas, services, etc.) and is ideal for smaller FastAPI applications or microservices.
+
+This structure separates code by layer (routers, models, schemas, services, etc.) and mirrors tests by type (unit vs integration). It is ideal for smaller FastAPI applications or microservices.
 
 ### LexiTau Project Structure
 ```
+
 backend/
-└── app/
-    ├── main.py                      # FastAPI entrypoint
-    ├── routers/                     # API route definitions
-    │   ├── __init__.py
-    │   ├── auth.py                  # Authentication endpoints
-    │   └── documents.py             # Document processing endpoints
-    ├── models/                      # Database models (SQLAlchemy ORM)
-    │   ├── __init__.py
-    │   ├── user.py                  # User model
-    │   ├── business.py              # Business model
-    │   ├── document.py              # Document model
-    │   ├── extracted_field.py       # ExtractedField model
-    │   ├── line_item.py             # LineItem model
-    │   ├── field_correction.py      # FieldCorrection model
-    │   ├── client.py                # Client model
-    │   ├── project.py               # Project model
-    │   └── category.py              # Category model
-    ├── schemas/                     # Pydantic models for request/response
-    │   ├── __init__.py
-    │   ├── auth.py                  # Auth request/response schemas
-    │   ├── user.py                  # User schemas
-    │   ├── item.py                  # Item schemas
-    │   └── document.py              # Document schemas
-    ├── services/                    # Business logic / service layer
-    │   ├── __init__.py
-    │   ├── auth_service.py          # Authentication business logic
-    │   ├── document_service.py      # Document processing services
-    │   ├── azure_form_recognizer.py # Azure OCR integration
-    │   ├── field_normalizer.py     # Field normalization logic
-    │   └── blob.py                  # Blob storage operations
-    ├── tasks/                       # Celery task definitions
-    │   ├── __init__.py
-    │   ├── document_tasks.py        # Document OCR processing tasks
-    │   ├── test_tasks.py            # Simple test tasks
-    │   └── ocr.py                   # Legacy OCR task wrappers
-    ├── core/                        # Configuration and infrastructure
-    │   ├── __init__.py
-    │   ├── settings.py              # Application settings
-    │   ├── celery.py                # Celery configuration
-    │   └── database.py              # Database configuration (optional)
-    ├── dependencies.py              # Dependency injection helpers
-    ├── auth.py                      # Authentication utilities
-    ├── db.py                        # Database session management
-    ├── enums.py                     # Application enumerations
-    └── test_db.py                   # Test database utilities
-└── tests/
-    ├── __init__.py
-    ├── models/                      # Model tests
-    │   ├── __init__.py
-    │   ├── test_user.py
-    │   ├── test_business.py
-    │   ├── test_document.py
-    │   └── test_model_imports.py
-    ├── services/                    # Service layer tests
-    │   ├── __init__.py
-    │   ├── test_auth_service.py
-    │   └── test_document_service.py
-    ├── tasks/                       # Task tests
-    │   ├── __init__.py
-    │   ├── test_task_execution.py
-    │   └── test_document_tasks.py
-    ├── test_auth.py                 # Authentication endpoint tests
-    ├── test_documents.py            # Document endpoint tests
-    ├── test_field_normalizer.py    # Field normalization tests
-    └── test_layout_scaffold.py     # Structure validation tests
+├── alembic/                     # Database migrations
+│   ├── env.py
+│   ├── script.py.mako
+│   └── versions/                # Migration scripts
+├── app/                         # Core FastAPI application
+│   ├── main.py                  # FastAPI entrypoint
+│   ├── routers/                 # API route definitions
+│   │   ├── auth.py
+│   │   └── documents.py
+│   ├── models/                  # Database models (SQLAlchemy ORM)
+│   │   ├── business.py
+│   │   ├── category.py
+│   │   ├── client.py
+│   │   ├── document.py
+│   │   ├── extracted\_field.py
+│   │   ├── field\_correction.py
+│   │   ├── line\_item.py
+│   │   ├── project.py
+│   │   └── user.py
+│   ├── schemas/                 # Pydantic models
+│   │   ├── auth.py
+│   │   ├── document.py
+│   │   ├── item.py
+│   │   └── user.py
+│   ├── services/                # Business logic
+│   │   ├── auth\_service.py
+│   │   ├── azure\_form\_recognizer.py
+│   │   ├── blob.py
+│   │   ├── document\_service.py
+│   │   └── field\_normalizer.py
+│   ├── tasks/                   # Celery tasks
+│   │   ├── document\_tasks.py
+│   │   ├── ocr.py
+│   │   └── test\_tasks.py
+│   ├── core/                    # Config and infrastructure
+│   │   ├── settings.py
+│   │   └── celery.py
+│   ├── dependencies.py
+│   ├── auth.py
+│   ├── db.py
+│   ├── enums.py
+│   └── test\_db.py
+├── scripts/                     # Utility scripts
+│   ├── migrate.py
+│   ├── setup\_db.sh
+│   └── test.sh
+├── tests/
+│   ├── unit/                    # Fast tests (SQLite)
+│   │   ├── models/
+│   │   │   ├── test\_business.py
+│   │   │   ├── test\_document.py
+│   │   │   ├── test\_field\_correction.py
+│   │   │   ├── test\_model\_imports.py
+│   │   │   └── test\_user.py
+│   │   ├── routers/
+│   │   │   ├── test\_documents.py
+│   │   │   ├── test\_line\_item\_updates.py
+│   │   │   └── test\_low\_confidence\_flagging.py
+│   │   ├── services/
+│   │   │   ├── test\_auth\_service.py
+│   │   │   └── test\_document\_service.py
+│   │   ├── tasks/
+│   │   │   └── test\_document\_tasks.py
+│   │   ├── conftest.py
+│   │   └── test\_layout\_scaffold.py
+│   └── integration/             # Heavier tests (Postgres, Azure)
+│       ├── conftest.py
+│       └── test\_azure\_integration.py
+├── worker.py                    # Celery worker entrypoint
+├── Dockerfile
+├── docker-compose.yml
+├── pytest.ini
+└── requirements.txt
+
 ```
 
 ### Key Directory Notes
-- **app/main.py** - Initializes the application and includes routers
-- **routers/** - Contains API endpoints grouped by resource (auth, documents)
-- **models/** - Defines database tables/ORM classes split by entity
-- **schemas/** - Defines Pydantic request/response models by resource
-- **services/** - Implements business logic and external integrations
-- **tasks/** - Celery task definitions for background processing
-- **dependencies.py** - Centralized FastAPI dependency injection helpers
-- **core/** - Configuration, infrastructure, and system utilities
-- **tests/** - Mirrors app structure for clear test organization
+- **app/main.py** – FastAPI entrypoint; initializes the application and includes routers
+- **routers/** – API endpoints grouped by resource (e.g., auth, documents)
+- **models/** – Database ORM classes split by entity (business, user, document, etc.)
+- **schemas/** – Pydantic request/response models for validation and serialization
+- **services/** – Business logic and external integrations (Azure, blob storage, normalization)
+- **tasks/** – Celery task definitions for background/async processing (OCR, test tasks)
+- **core/** – Configuration and infrastructure (settings, Celery setup)
+- **dependencies.py** – Centralized FastAPI dependency injection helpers
+- **auth.py** – Authentication utilities (JWT, password hashing, etc.)
+- **db.py** – Database session management
+- **enums.py** – Application enumerations (DocumentType, FileType, etc.)
+- **test_db.py** – Utilities for test database configuration
+- **alembic/** – Database migrations (env, script templates, versioned migration files)
+- **scripts/** – Utility scripts for database setup, migration, and testing
+- **worker.py** – Celery worker entrypoint for background task execution
+- **tests/** – Split into:
+  - **unit/** → Fast SQLite-based tests, mirrors app layers (models, routers, services, tasks)
+  - **integration/** → Heavier Postgres/Azure tests requiring external services
 
-### Where Things Live - Quick Reference
 
-**Authentication & User Management:**
-- Routes: `app/routers/auth.py` 
+### Where Things Live – Quick Reference
+
+**Authentication & User Management**
+- Routes: `app/routers/auth.py`
 - Models: `app/models/user.py`, `app/models/business.py`
 - Schemas: `app/schemas/auth.py`, `app/schemas/user.py`
 - Business Logic: `app/services/auth_service.py`
-- Tests: `tests/test_auth.py`, `tests/services/test_auth_service.py`
+- Tests:
+  - Unit: `tests/unit/services/test_auth_service.py`
+  - Unit: `tests/unit/routers/test_documents.py` (auth-related scenarios)
+  - Integration: covered in `tests/integration/` if Postgres-specific
 
-**Document Processing:**
+**Document Processing**
 - Routes: `app/routers/documents.py`
-- Models: `app/models/document.py`, `app/models/extracted_field.py`, `app/models/line_item.py`
+- Models: `app/models/document.py`, `app/models/extracted_field.py`, `app/models/line_item.py`, `app/models/field_correction.py`
 - Schemas: `app/schemas/document.py`
 - Business Logic: `app/services/document_service.py`
-- Background Tasks: `app/tasks/document_tasks.py`
+- Background Tasks: `app/tasks/document_tasks.py`, `app/tasks/ocr.py`
 - External Integrations: `app/services/azure_form_recognizer.py`, `app/services/blob.py`
-- Tests: `tests/test_documents.py`, `tests/services/test_document_service.py`, `tests/tasks/test_document_tasks.py`
+- Tests:
+  - Unit: `tests/unit/routers/test_documents.py`
+  - Unit: `tests/unit/services/test_document_service.py`
+  - Unit: `tests/unit/tasks/test_document_tasks.py`
+  - Unit: `tests/unit/routers/test_line_item_updates.py`, `tests/unit/routers/test_low_confidence_flagging.py`
+  - Integration: `tests/integration/test_azure_integration.py` (Azure Document Intelligence)
 
-**Configuration & Infrastructure:**
+**Field Processing & Corrections**
+- Models: `app/models/field_correction.py`
+- Business Logic: `app/services/field_normalizer.py`
+- Tests:
+  - Unit: `tests/unit/models/test_field_correction.py`
+  - Unit: `tests/unit/test_field_normalizer.py`
+
+**Configuration & Infrastructure**
 - Settings: `app/core/settings.py`
 - Database: `app/db.py`, `app/test_db.py`
-- Celery: `app/core/celery.py`
+- Celery: `app/core/celery.py`, `worker.py`
 - Dependencies: `app/dependencies.py`
 - Enums: `app/enums.py`
 
-**Field Processing & Corrections:**
-- Models: `app/models/field_correction.py`
-- Business Logic: `app/services/field_normalizer.py`
-- Tests: `tests/test_field_normalizer.py`
+**Migrations & Scripts**
+- Database Migrations: `backend/alembic/` (env, templates, `versions/` with migration scripts)
+- Utility Scripts: `backend/scripts/`
+  - `migrate.py` – run migrations
+  - `setup_db.sh` – initialize database
+  - `test.sh` – run tests inside Docker
+
+**Tests**
+- Unit Tests (SQLite, fast):
+  - `tests/unit/models/`
+  - `tests/unit/routers/`
+  - `tests/unit/services/`
+  - `tests/unit/tasks/`
+  - `tests/unit/conftest.py`
+  - `tests/unit/test_layout_scaffold.py`
+- Integration Tests (Postgres/Azure, heavier):
+  - `tests/integration/conftest.py`
+  - `tests/integration/test_azure_integration.py`
 
 This structure ensures clear separation of concerns with business logic in services, thin controllers in routers, and comprehensive test coverage mirroring the application structure.
 
 ## Error Handling and Validation
-Prioritize error handling and edge cases:
+
+Prioritize error handling, edge cases, and test coverage:
+
+### Code-Level Practices
 - Handle errors and edge cases at the beginning of functions
 - Use early returns for error conditions to avoid deeply nested if statements
 - Place the happy path last in the function for improved readability
-- Avoid unnecessary else statements; use the if-return pattern instead
+- Avoid unnecessary `else` statements; use the **if-return** pattern instead
 - Use guard clauses to handle preconditions and invalid states early
 - Implement proper error logging and user-friendly error messages
 - Use custom error types or error factories for consistent error handling
+
+### Test-Level Practices
+- **Characterization tests**:  
+  When modifying existing or legacy logic (including migrations), first capture current behavior in a test before making changes.  
+  This locks in assumptions and prevents regressions.
+  
+- **SQLite vs Postgres differences**:  
+  - Run unit tests on SQLite by default for speed.  
+  - If behavior diverges (UUIDs, ENUMs, `func.now()`, DECIMAL precision, migrations, etc.), add a Postgres-specific test in `tests/integration/`.  
+  - Mark such tests with `@pytest.mark.integration` for clarity.
+
+- **Migrations**:  
+  - Write at least one test per critical migration to ensure schema consistency and data integrity.  
+  - Example: verify ENUM values, non-null defaults, and UUID primary keys work as expected in Postgres.  
+  - Use rollback fixtures to reset the schema between integration tests.
+
+- **Error scenarios**:  
+  - Add tests for both the "happy path" and expected failures (e.g., constraint violations, invalid input).  
+  - Ensure Postgres integration tests capture behavior around database constraints (unique indexes, foreign key enforcement).
+
+- **External dependencies**:  
+  - Wrap external calls (Azure, blob storage, email, etc.) with services that can be mocked in tests.  
+  - Unit tests should mock integrations; real integrations go under `tests/integration/`.
+
+### Example: Postgres Integration Test
+```python
+import pytest
+from sqlalchemy.exc import DataError
+
+@pytest.mark.integration
+def test_enum_rejects_invalid_value(db_session):
+    from app.models.document import Document, DocumentType
+    # Arrange
+    doc = Document(name="Bad Doc", type="INVALID")  # not in enum
+    
+    # Act / Assert
+    with pytest.raises(DataError):
+        db_session.add(doc)
+        db_session.commit()
 
 ## FastAPI-Specific Patterns
 - Use functional components (plain functions) and Pydantic models for input validation and response schemas
@@ -297,7 +414,7 @@ async def get_user(
    - Structure routes and dependencies clearly to optimize readability and maintainability
 
 ---
-alwaysApply: false
+alwaysApply: true
 ---
 
 # Testing and Legacy Code Management
@@ -346,6 +463,138 @@ class OrderProcessor:
     def process_order(self, order):
         self.email_service.send_confirmation(order.email)
 ```
+
+## Testing Best Practices (Appendix)
+
+This appendix is a quick-reference for keeping tests fast, reliable, and clear across SQLite (unit) and Postgres (integration).
+
+### 1) SQLite vs Postgres — What goes where
+- **SQLite (unit tests; default)**: pure business logic, routers/services, simple ORM queries, validation, serialization, Celery task wiring (mock external calls).
+- **Postgres (integration tests)**: UUID/ENUM behavior, `func.now()` semantics, DECIMAL precision/rounding, migrations/Alembic, complex joins/window functions, real constraint checks, external service smoke tests.
+
+Mark Postgres tests with:
+```python
+import pytest
+
+@pytest.mark.integration
+def test_postgres_specific_behavior(...):
+    ...
+````
+
+### 2) Parallelism
+
+* ✅ Safe to use `-n auto` for **unit (SQLite) tests**.
+* ❌ Avoid parallelism for **integration (Postgres)** unless you isolate DBs per worker.
+* Run split locally:
+
+```bash
+# Fast feedback loop
+docker compose run --no-deps --rm fastapi pytest -q -m "not integration" -n auto
+# Heavier, sequential
+docker compose run --no-deps --rm fastapi pytest -q -m integration
+```
+
+### 3) Transactions & isolation
+
+* **Unit/SQLite**: one shared in-memory schema; **start a transaction per test** and **ROLLBACK** at teardown; never create/drop tables in hot path.
+* **Integration/Postgres**: **create schema once per session**, wrap each test in a **transaction + rollback**; truncate between modules if needed.
+
+### 4) Data setup
+
+* Prefer **factory functions/fixtures** (e.g., `make_user`, `make_document`) over inline inserts.
+* Keep fixtures **minimal** and **explicit**; avoid global, stateful fixtures that surprise other tests.
+
+### 5) External services
+
+* **Default to mocks**: Azure Document Intelligence, blob storage, email/SMS, HTTP calls.
+* Put real, networked checks under **`tests/integration/`** and guard with env flags if they incur cost or flakiness.
+
+Example pattern:
+
+```python
+from unittest.mock import Mock, patch
+
+def test_service_uses_azure_client_safely():
+    with patch("app.services.azure_form_recognizer.AzureFormRecognizerClient") as C:
+        client = C.return_value
+        client.extract_fields.return_value = {"fields": [], "line_items": []}
+        # call your service; assert interactions
+```
+
+### 6) Migrations
+
+* Add **at least one test** per critical migration:
+
+  * ENUM values and not-null defaults
+  * UUID PKs insert/round-trip
+  * Backfill scripts (pre/post conditions)
+* Use rollback to keep the DB clean; never rely on migration order assumptions without asserting them.
+
+### 7) Flaky test prevention
+
+* Fix nondeterminism: set random seeds, freeze time where helpful.
+* Don’t assert on **unordered** collections; sort before asserting.
+* For async tasks, use **explicit synchronization** (await result, poll status) rather than sleeps.
+
+### 8) Assertions & readability
+
+* One behavior per test; descriptive names: `test_<unit>_<behavior>_<expected>()`
+* Prefer **precise assertions** over broad “not None”.
+* For money/decimal: assert using `Decimal` and expected scales.
+
+### 9) Logging & diagnostics
+
+* Keep logs visible when debugging:
+
+```bash
+docker compose run --no-deps --rm fastapi pytest -q -m "not integration" -o log_cli=true -o log_cli_level=INFO
+```
+
+* Use `caplog` to assert warnings/errors from your services.
+
+### 10) Pytest config suggestions
+
+In `pytest.ini`:
+
+```ini
+[pytest]
+addopts = -q
+markers =
+    integration: tests requiring Postgres or external services
+filterwarnings =
+    ignore::DeprecationWarning
+```
+
+### 11) Skips & env-gated tests
+
+* Skip costly/external tests if env isn’t configured:
+
+```python
+import os, pytest
+
+requires_azure = pytest.mark.skipif(
+    not os.getenv("AZURE_TESTS_ENABLED"),
+    reason="Set AZURE_TESTS_ENABLED=1 to run"
+)
+```
+
+### 12) Performance hygiene
+
+* Keep unit tests sub-second; refactor slow tests or push them to integration.
+* Avoid DDL in hot paths; favor transactions and TRUNCATE for cleanup.
+* Cache heavy fixtures at **session** scope only when they don’t leak state.
+
+### 13) Coverage (optional but encouraged)
+
+* Measure locally:
+
+```bash
+docker compose run --no-deps --rm fastapi pytest -q -m "not integration" \
+  --cov=app --cov-report=term-missing
+```
+
+Focus on: services (business logic), routers (contract), and error paths.
+
 
 ## Using Seams for Isolation
 When facing hardcoded logic or direct dependencies:

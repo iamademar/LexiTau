@@ -217,7 +217,11 @@ class DocumentQueryService:
         per_page: int = 20,
         status: Optional[DocumentStatus] = None,
         document_type: Optional[DocumentType] = None,
-        is_reviewed: Optional[bool] = None
+        classification: Optional[DocumentClassification] = None,
+        is_reviewed: Optional[bool] = None,
+        client_id: Optional[int] = None,
+        project_id: Optional[int] = None,
+        category_id: Optional[int] = None
     ) -> DocumentListResponse:
         """
         List all documents for a business with filters and pagination.
@@ -228,11 +232,18 @@ class DocumentQueryService:
             page: Page number (1-based)
             per_page: Items per page
             status: Optional status filter
-            document_type: Optional document type filter  
+            document_type: Optional document type filter
+            classification: Optional classification filter (REVENUE, EXPENSE)
             is_reviewed: Optional review status filter
+            client_id: Optional client ID filter (validates business ownership)
+            project_id: Optional project ID filter (validates business ownership)  
+            category_id: Optional category ID filter (global scope)
             
         Returns:
             DocumentListResponse with paginated documents
+            
+        Raises:
+            HTTPException: If client_id or project_id don't belong to the business
         """
         # Base query for business documents
         query = db.query(models.Document).filter(models.Document.business_id == business_id)
@@ -243,12 +254,63 @@ class DocumentQueryService:
         
         if document_type:
             query = query.filter(models.Document.document_type == document_type)
+            
+        if classification:
+            query = query.filter(models.Document.classification == classification)
         
         if is_reviewed is not None:
             if is_reviewed:
                 query = query.filter(models.Document.reviewed_at.is_not(None))
             else:
                 query = query.filter(models.Document.reviewed_at.is_(None))
+                
+        # Tag-based filters with business ownership validation
+        if client_id is not None:
+            # Validate client belongs to business
+            client_exists = db.query(models.Client).filter(
+                models.Client.id == client_id,
+                models.Client.business_id == business_id
+            ).first()
+            
+            if not client_exists:
+                from fastapi import HTTPException, status as http_status
+                raise HTTPException(
+                    status_code=http_status.HTTP_400_BAD_REQUEST,
+                    detail="Client not found or access denied. Client must belong to your business."
+                )
+            
+            query = query.filter(models.Document.client_id == client_id)
+            
+        if project_id is not None:
+            # Validate project belongs to business  
+            project_exists = db.query(models.Project).filter(
+                models.Project.id == project_id,
+                models.Project.business_id == business_id
+            ).first()
+            
+            if not project_exists:
+                from fastapi import HTTPException, status as http_status
+                raise HTTPException(
+                    status_code=http_status.HTTP_400_BAD_REQUEST,
+                    detail="Project not found or access denied. Project must belong to your business."
+                )
+                
+            query = query.filter(models.Document.project_id == project_id)
+            
+        if category_id is not None:
+            # Validate category exists (categories are global)
+            category_exists = db.query(models.Category).filter(
+                models.Category.id == category_id
+            ).first()
+            
+            if not category_exists:
+                from fastapi import HTTPException, status as http_status
+                raise HTTPException(
+                    status_code=http_status.HTTP_400_BAD_REQUEST,
+                    detail="Category not found."
+                )
+                
+            query = query.filter(models.Document.category_id == category_id)
         
         # Count total items for pagination
         total_items = query.count()

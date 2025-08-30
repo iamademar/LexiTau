@@ -23,7 +23,9 @@ from ..schemas import (
     LineItemUpdateRequest,
     LineItemUpdateResponse,
     MarkReviewedRequest,
-    MarkReviewedResponse
+    MarkReviewedResponse,
+    DocumentTagRequest,
+    DocumentTagResponse
 )
 from ..enums import FileType, DocumentType, DocumentStatus, DocumentClassification
 from ..services.document_service import (
@@ -90,7 +92,11 @@ async def list_business_documents(
     per_page: int = Query(20, ge=1, le=100, description="Items per page"),
     status: Optional[DocumentStatus] = Query(None, description="Filter by document status"),
     document_type: Optional[DocumentType] = Query(None, description="Filter by document type"),
+    classification: Optional[DocumentClassification] = Query(None, description="Filter by document classification (revenue or expense)"),
     is_reviewed: Optional[bool] = Query(None, description="Filter by review status (True=reviewed, False=not reviewed)"),
+    client_id: Optional[int] = Query(None, description="Filter by client ID"),
+    project_id: Optional[int] = Query(None, description="Filter by project ID"),  
+    category_id: Optional[int] = Query(None, description="Filter by category ID"),
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -100,7 +106,14 @@ async def list_business_documents(
     Supports filtering by:
     - status: PENDING, PROCESSING, COMPLETED, FAILED
     - document_type: INVOICE, RECEIPT
+    - classification: REVENUE, EXPENSE
     - is_reviewed: True (reviewed), False (not reviewed)
+    - client_id: Filter by associated client
+    - project_id: Filter by associated project
+    - category_id: Filter by associated category
+    
+    Tag filters (client_id, project_id, category_id) validate ownership to ensure
+    users can only filter by tags that belong to their business.
     
     Returns paginated results with metadata.
     """
@@ -111,7 +124,11 @@ async def list_business_documents(
         per_page=per_page,
         status=status,
         document_type=document_type,
-        is_reviewed=is_reviewed
+        classification=classification,
+        is_reviewed=is_reviewed,
+        client_id=client_id,
+        project_id=project_id,
+        category_id=category_id
     )
 
 
@@ -668,3 +685,120 @@ async def mark_document_reviewed(
         user_id=current_user.id,
         business_id=current_user.business_id
     )
+
+
+@router.put("/{document_id}/tag", response_model=DocumentTagResponse)
+async def tag_document(
+    document_id: UUID,
+    tag_request: DocumentTagRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Tag a document with client, project, and/or category.
+    
+    This endpoint allows users to associate documents with clients, projects, and categories
+    for better organization and reporting. All tag fields are optional.
+    
+    Requirements:
+    - User must have access to the document (same business)
+    - Client and project must belong to the same business as the user
+    - Category can be any valid category (categories are global)
+    
+    Business Logic:
+    - Validates ownership of document, client, and project
+    - Allows null values for optional fields (project_id, category_id)
+    - Updates document metadata with tag associations
+    - Records timestamp of tagging operation
+    
+    Returns updated document metadata with tag information.
+    """
+    # Validate user has access to document
+    document = db.query(models.Document).filter(
+        models.Document.id == document_id,
+        models.Document.business_id == current_user.business_id
+    ).first()
+    
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found or access denied"
+        )
+    
+    # Validate client ownership if client_id is provided
+    if tag_request.client_id is not None:
+        client = db.query(models.Client).filter(
+            models.Client.id == tag_request.client_id,
+            models.Client.business_id == current_user.business_id
+        ).first()
+        
+        if not client:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Client not found or access denied. Client must belong to your business."
+            )
+    
+    # Validate project ownership if project_id is provided  
+    if tag_request.project_id is not None:
+        project = db.query(models.Project).filter(
+            models.Project.id == tag_request.project_id,
+            models.Project.business_id == current_user.business_id
+        ).first()
+        
+        if not project:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Project not found or access denied. Project must belong to your business."
+            )
+    
+    # Validate category exists if category_id is provided (categories are global)
+    if tag_request.category_id is not None:
+        category = db.query(models.Category).filter(
+            models.Category.id == tag_request.category_id
+        ).first()
+        
+        if not category:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Category not found."
+            )
+    
+    try:
+        # Update document with tag information (only update fields that are explicitly provided)
+        update_data = tag_request.model_dump(exclude_unset=True)
+        
+        if "client_id" in update_data:
+            document.client_id = tag_request.client_id
+        if "project_id" in update_data:
+            document.project_id = tag_request.project_id  
+        if "category_id" in update_data:
+            document.category_id = tag_request.category_id
+            
+        document.updated_at = func.now()
+        
+        # Commit the changes
+        db.commit()
+        db.refresh(document)
+        
+        # Log the tagging operation for audit purposes
+        logger.info(f"Document {document_id} tagged by user {current_user.id}. "
+                   f"Client: {tag_request.client_id}, Project: {tag_request.project_id}, "
+                   f"Category: {tag_request.category_id}")
+        
+        return DocumentTagResponse(
+            success=True,
+            message="Document tagged successfully",
+            document_id=document_id,
+            client_id=document.client_id,
+            project_id=document.project_id,
+            category_id=document.category_id,
+            updated_at=document.updated_at
+        )
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to tag document {document_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to tag document"
+        )
