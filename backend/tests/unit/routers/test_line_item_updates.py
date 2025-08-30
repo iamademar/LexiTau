@@ -5,35 +5,45 @@ Tests all aspects including validation, authentication, authorization, and busin
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, Session
 from uuid import uuid4
 from decimal import Decimal
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from app.main import app
 from app.models import Business, User, Document, LineItem
-from app.enums import DocumentStatus, DocumentType, FileType
-from app.auth import create_access_token, create_user_and_business
-from app.test_db import get_test_db, create_test_tables, drop_test_tables
-from app.db import get_db
-from app.schemas.document import LineItemUpdateRequest
+from app.enums import DocumentStatus, DocumentType, FileType, DocumentClassification
+from app.auth import create_access_token, get_password_hash
+from app.db import get_db, Base
+from app.schemas import LineItemUpdateRequest
 
+
+# Create in-memory SQLite database for testing to avoid PostgreSQL timeout issues
+SQLITE_DATABASE_URL = "sqlite:///./test_line_item_updates.db"
+engine = create_engine(SQLITE_DATABASE_URL, connect_args={"check_same_thread": False})
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+def override_get_db():
+    try:
+        db = TestingSessionLocal()
+        yield db
+    finally:
+        db.close()
+
+# Create tables and override dependency
+Base.metadata.create_all(bind=engine)
+app.dependency_overrides[get_db] = override_get_db
 
 client = TestClient(app)
 
-# Override the dependency for testing to use the test database
-app.dependency_overrides[get_db] = lambda: next(get_test_db())
-
-
-@pytest.fixture(scope="module")
-def setup_database():
-    create_test_tables()
-    yield
-    drop_test_tables()
-
 
 @pytest.fixture
-def db_session(setup_database):
-    db = next(get_test_db())
+def db_session():
+    """Create a fresh database session for each test"""
+    db = TestingSessionLocal()
     try:
         yield db
     finally:
@@ -54,15 +64,17 @@ def test_user_and_token(db_session):
     
     business = Business(name=f"Test Business {unique_suffix}")
     db_session.add(business)
-    db_session.flush()
+    db_session.commit()
+    db_session.refresh(business)
     
     user = User(
         email=f"test_{unique_suffix}@example.com",
-        password_hash="dummy_hash",
+        password_hash=get_password_hash("testpassword123"),
         business_id=business.id
     )
     db_session.add(user)
-    db_session.flush()
+    db_session.commit()
+    db_session.refresh(user)
     
     token = create_access_token(data={"sub": user.email})
     
@@ -81,10 +93,12 @@ def completed_document_with_line_item(test_user_and_token, db_session):
         file_url="https://example.com/test.pdf",
         file_type=FileType.PDF,
         document_type=DocumentType.INVOICE,
+        classification=DocumentClassification.EXPENSE,
         status=DocumentStatus.COMPLETED
     )
     db_session.add(document)
-    db_session.flush()
+    db_session.commit()
+    db_session.refresh(document)
     
     line_item = LineItem(
         document_id=document.id,
@@ -95,7 +109,8 @@ def completed_document_with_line_item(test_user_and_token, db_session):
         confidence=0.95
     )
     db_session.add(line_item)
-    db_session.flush()
+    db_session.commit()
+    db_session.refresh(line_item)
     
     return document, line_item, user, token
 
@@ -260,15 +275,15 @@ class TestLineItemUpdateEndpoint:
         unique_suffix = str(uuid.uuid4())[:8]
         other_business = Business(name=f"Other Business {unique_suffix}")
         db_session.add(other_business)
-        db_session.flush()
+        db_session.commit()
         
         other_user = User(
             email=f"other_{unique_suffix}@example.com",
-            password_hash="dummy_hash",
+            password_hash=get_password_hash("testpassword123"),
             business_id=other_business.id
         )
         db_session.add(other_user)
-        db_session.flush()
+        db_session.commit()
         
         other_token = create_access_token(data={"sub": other_user.email})
         
@@ -294,10 +309,12 @@ class TestLineItemUpdateEndpoint:
             file_url="https://example.com/pending.pdf",
             file_type=FileType.PDF,
             document_type=DocumentType.INVOICE,
+            classification=DocumentClassification.EXPENSE,
             status=DocumentStatus.PENDING
         )
         db_session.add(pending_doc)
-        db_session.flush()
+        db_session.commit()
+        db_session.refresh(pending_doc)
         
         line_item = LineItem(
             document_id=pending_doc.id,
@@ -307,7 +324,8 @@ class TestLineItemUpdateEndpoint:
             total=Decimal("100")
         )
         db_session.add(line_item)
-        db_session.flush()
+        db_session.commit()
+        db_session.refresh(line_item)
         
         headers = {"Authorization": f"Bearer {token}"}
         response = client.put(
@@ -347,10 +365,12 @@ class TestLineItemUpdateEndpoint:
             file_url="https://example.com/other.pdf",
             file_type=FileType.PDF,
             document_type=DocumentType.INVOICE,
+            classification=DocumentClassification.EXPENSE,
             status=DocumentStatus.COMPLETED
         )
         db_session.add(other_doc)
-        db_session.flush()
+        db_session.commit()
+        db_session.refresh(other_doc)
         
         other_line_item = LineItem(
             document_id=other_doc.id,
@@ -360,7 +380,8 @@ class TestLineItemUpdateEndpoint:
             total=Decimal("200")
         )
         db_session.add(other_line_item)
-        db_session.flush()
+        db_session.commit()
+        db_session.refresh(other_line_item)
         
         headers = {"Authorization": f"Bearer {token}"}
         # Try to update other_line_item using wrong document ID

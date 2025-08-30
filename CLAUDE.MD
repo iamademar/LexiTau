@@ -41,12 +41,25 @@ alwaysApply: true
 - When asked to create new migration, use: `docker-compose exec fastapi alembic revision --autogenerate -m "description"`
 
 ### Testing Commands
-- When asked to run tests, use: `docker-compose exec fastapi pytest`
-- When asked to run specific test files, use: `docker-compose exec fastapi pytest {test_file_path}`
-- When asked to run tests with coverage, use: `docker-compose exec fastapi pytest --cov=app`
-- When asked to run unit tests only, use: `docker-compose exec fastapi pytest tests/unit/`
-- When asked to run integration tests, use: `docker-compose exec fastapi pytest tests/integration/`
-- When asked to skip slow tests, use: `docker-compose exec fastapi pytest -m "not slow"`
+- **Default (SQLite, fast unit tests):**
+  `docker compose run --no-deps --rm fastapi pytest -q`
+
+- **Verbose (SQLite):**
+  `docker compose run --no-deps --rm fastapi pytest -vv`
+
+- **Parallel (SQLite, multi-core):**
+  `docker compose run --no-deps --rm fastapi pytest -q -n auto`
+
+- **Integration tests only (Postgres required):**
+  `docker compose run --no-deps --rm fastapi pytest -q -m integration`
+  # or
+  `docker compose run --no-deps --rm fastapi pytest -q tests/integration`
+
+- **All tests (SQLite + Postgres):**
+  `docker compose run --no-deps --rm fastapi pytest -q -m ""`
+
+⚡️ Most tests run on SQLite by default.  
+If a test fails on SQLite because of Postgres-only features (UUID, ENUM, `func.now()`, DECIMAL precision, migrations, etc.), move it to `tests/integration/` or mark it with `@pytest.mark.integration`.
 
 ### Development Commands
 - When asked to install Python packages, access the container first: `docker-compose exec fastapi bash` then run pip commands
@@ -91,50 +104,118 @@ alwaysApply: true
 ## File Structure: Layer-Based Organization
 This structure separates code by layer (routers, models, schemas, services, etc.) and is ideal for smaller FastAPI applications or microservices.
 
+### LexiTau Project Structure
 ```
-my_fastapi_project/
-├── app/
-│   ├── main.py                 # FastAPI entrypoint
-│   ├── routers/                # API route definitions
-│   │   ├── __init__.py
-│   │   ├── users.py
-│   │   └── items.py
-│   ├── models/                 # Database models (SQLAlchemy, etc.)
-│   │   ├── __init__.py
-│   │   ├── user.py
-│   │   └── item.py
-│   ├── schemas/                # Pydantic models for request/response
-│   │   ├── __init__.py
-│   │   ├── user.py
-│   │   └── item.py
-│   ├── services/               # Business logic / service layer
-│   │   ├── __init__.py
-│   │   ├── user_service.py
-│   │   └── item_service.py
-│   ├── dependencies.py         # Dependency injection helpers
-│   └── core/                   # Config, settings, utils
-│       ├── __init__.py
-│       ├── config.py
-│       ├── database.py
-│       └── security.py
+backend/
+└── app/
+    ├── main.py                      # FastAPI entrypoint
+    ├── routers/                     # API route definitions
+    │   ├── __init__.py
+    │   ├── auth.py                  # Authentication endpoints
+    │   └── documents.py             # Document processing endpoints
+    ├── models/                      # Database models (SQLAlchemy ORM)
+    │   ├── __init__.py
+    │   ├── user.py                  # User model
+    │   ├── business.py              # Business model
+    │   ├── document.py              # Document model
+    │   ├── extracted_field.py       # ExtractedField model
+    │   ├── line_item.py             # LineItem model
+    │   ├── field_correction.py      # FieldCorrection model
+    │   ├── client.py                # Client model
+    │   ├── project.py               # Project model
+    │   └── category.py              # Category model
+    ├── schemas/                     # Pydantic models for request/response
+    │   ├── __init__.py
+    │   ├── auth.py                  # Auth request/response schemas
+    │   ├── user.py                  # User schemas
+    │   ├── item.py                  # Item schemas
+    │   └── document.py              # Document schemas
+    ├── services/                    # Business logic / service layer
+    │   ├── __init__.py
+    │   ├── auth_service.py          # Authentication business logic
+    │   ├── document_service.py      # Document processing services
+    │   ├── azure_form_recognizer.py # Azure OCR integration
+    │   ├── field_normalizer.py     # Field normalization logic
+    │   └── blob.py                  # Blob storage operations
+    ├── tasks/                       # Celery task definitions
+    │   ├── __init__.py
+    │   ├── document_tasks.py        # Document OCR processing tasks
+    │   ├── test_tasks.py            # Simple test tasks
+    │   └── ocr.py                   # Legacy OCR task wrappers
+    ├── core/                        # Configuration and infrastructure
+    │   ├── __init__.py
+    │   ├── settings.py              # Application settings
+    │   ├── celery.py                # Celery configuration
+    │   └── database.py              # Database configuration (optional)
+    ├── dependencies.py              # Dependency injection helpers
+    ├── auth.py                      # Authentication utilities
+    ├── db.py                        # Database session management
+    ├── enums.py                     # Application enumerations
+    └── test_db.py                   # Test database utilities
 └── tests/
     ├── __init__.py
-    ├── test_main.py
-    ├── test_users.py
-    └── test_items.py
+    ├── models/                      # Model tests
+    │   ├── __init__.py
+    │   ├── test_user.py
+    │   ├── test_business.py
+    │   ├── test_document.py
+    │   └── test_model_imports.py
+    ├── services/                    # Service layer tests
+    │   ├── __init__.py
+    │   ├── test_auth_service.py
+    │   └── test_document_service.py
+    ├── tasks/                       # Task tests
+    │   ├── __init__.py
+    │   ├── test_task_execution.py
+    │   └── test_document_tasks.py
+    ├── test_auth.py                 # Authentication endpoint tests
+    ├── test_documents.py            # Document endpoint tests
+    ├── test_field_normalizer.py    # Field normalization tests
+    └── test_layout_scaffold.py     # Structure validation tests
 ```
 
 ### Key Directory Notes
 - **app/main.py** - Initializes the application and includes routers
-- **routers/** - Contains API endpoints grouped by resource
-- **models/** - Defines database tables or ORM classes
-- **schemas/** - Defines Pydantic request/response models
-- **services/** - Implements business logic (e.g., user registration, item processing)
-- **dependencies.py** - Shared FastAPI dependencies (DB session, auth, etc.)
-- **core/** - Configuration, database setup, security utilities
-- **tests/** - Mirrors routes/services for clear mapping in test coverage
+- **routers/** - Contains API endpoints grouped by resource (auth, documents)
+- **models/** - Defines database tables/ORM classes split by entity
+- **schemas/** - Defines Pydantic request/response models by resource
+- **services/** - Implements business logic and external integrations
+- **tasks/** - Celery task definitions for background processing
+- **dependencies.py** - Centralized FastAPI dependency injection helpers
+- **core/** - Configuration, infrastructure, and system utilities
+- **tests/** - Mirrors app structure for clear test organization
 
-This structure is recommended for smaller apps where clarity and separation of concerns are prioritized.
+### Where Things Live - Quick Reference
+
+**Authentication & User Management:**
+- Routes: `app/routers/auth.py` 
+- Models: `app/models/user.py`, `app/models/business.py`
+- Schemas: `app/schemas/auth.py`, `app/schemas/user.py`
+- Business Logic: `app/services/auth_service.py`
+- Tests: `tests/test_auth.py`, `tests/services/test_auth_service.py`
+
+**Document Processing:**
+- Routes: `app/routers/documents.py`
+- Models: `app/models/document.py`, `app/models/extracted_field.py`, `app/models/line_item.py`
+- Schemas: `app/schemas/document.py`
+- Business Logic: `app/services/document_service.py`
+- Background Tasks: `app/tasks/document_tasks.py`
+- External Integrations: `app/services/azure_form_recognizer.py`, `app/services/blob.py`
+- Tests: `tests/test_documents.py`, `tests/services/test_document_service.py`, `tests/tasks/test_document_tasks.py`
+
+**Configuration & Infrastructure:**
+- Settings: `app/core/settings.py`
+- Database: `app/db.py`, `app/test_db.py`
+- Celery: `app/core/celery.py`
+- Dependencies: `app/dependencies.py`
+- Enums: `app/enums.py`
+
+**Field Processing & Corrections:**
+- Models: `app/models/field_correction.py`
+- Business Logic: `app/services/field_normalizer.py`
+- Tests: `tests/test_field_normalizer.py`
+
+This structure ensures clear separation of concerns with business logic in services, thin controllers in routers, and comprehensive test coverage mirroring the application structure.
 
 ## Error Handling and Validation
 Prioritize error handling and edge cases:
