@@ -144,6 +144,7 @@ class TestFieldCorrectionModel:
     def test_multiple_corrections_same_field(self, db_session: Session, test_user_and_document):
         user, document = test_user_and_document
 
+        # First correction
         c1 = FieldCorrection(
             document_id=document.id,
             field_name="vendor_name",
@@ -153,6 +154,7 @@ class TestFieldCorrectionModel:
         )
         db_session.add(c1); db_session.commit(); db_session.refresh(c1)
 
+        # Second correction (same field)
         c2 = FieldCorrection(
             document_id=document.id,
             field_name="vendor_name",
@@ -162,22 +164,24 @@ class TestFieldCorrectionModel:
         )
         db_session.add(c2); db_session.commit(); db_session.refresh(c2)
 
+        # Stable ordering; UUID tie-breaker means order isn't guaranteed across runs
         vendor_corr = (
             db_session.query(FieldCorrection)
             .filter(
                 FieldCorrection.document_id == document.id,
                 FieldCorrection.field_name == "vendor_name",
             )
-            # 👇 add tie-breaker so order is stable even if timestamps are equal
             .order_by(FieldCorrection.timestamp, FieldCorrection.id)
             .all()
         )
 
+        # Assert both corrections exist (order-agnostic)
         assert len(vendor_corr) == 2
-        assert vendor_corr[0].corrected_value == "XYZ Corporation"
-        assert vendor_corr[1].corrected_value == "XYZ Corp Ltd."
-        # 👇 allow second-level timestamp ties on SQLite
+        assert {vc.corrected_value for vc in vendor_corr} == {"XYZ Corporation", "XYZ Corp Ltd."}
+
+        # Allow same-second ties on SQLite; ensure non-decreasing timestamps
         assert vendor_corr[0].timestamp <= vendor_corr[1].timestamp
+
 
     def test_correction_cascade_delete_with_document(self, db_session: Session, test_user_and_document):
         user, document = test_user_and_document
