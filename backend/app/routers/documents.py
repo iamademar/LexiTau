@@ -6,10 +6,9 @@ from uuid import UUID
 import logging
 import math
 
-from ..db import get_db
-from ..auth import get_current_user
-from ..models import User, Document, ExtractedField, LineItem, FieldCorrection
-from ..schemas.document import (
+from ..dependencies import get_db, get_current_user
+from .. import models
+from ..schemas import (
     DocumentUploadResponse, 
     DocumentUploadResult, 
     DocumentListResponse, 
@@ -20,170 +19,29 @@ from ..schemas.document import (
     LineItemResponse,
     FieldCorrectionsRequest,
     FieldCorrectionsResponse,
-    FieldCorrectionResult
+    FieldCorrectionResult,
+    LineItemUpdateRequest,
+    LineItemUpdateResponse,
+    MarkReviewedRequest,
+    MarkReviewedResponse
 )
-from ..services.blob import get_azure_blob_service
-from ..enums import FileType, DocumentType, DocumentStatus
-from ..tasks.ocr import dispatch_ocr_task
+from ..enums import FileType, DocumentType, DocumentStatus, DocumentClassification
+from ..services.document_service import (
+    DocumentProcessingService, 
+    DocumentQueryService,
+    DocumentManagementService
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
-# File size limit: 10MB
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB in bytes
-
-
-def validate_file_size(file: UploadFile) -> bool:
-    """Validate file size is under the limit"""
-    if not hasattr(file.file, 'seek') or not hasattr(file.file, 'tell'):
-        return True  # Can't check size, allow it
-    
-    # Get current position
-    current_pos = file.file.tell()
-    
-    # Seek to end to get file size
-    file.file.seek(0, 2)
-    file_size = file.file.tell()
-    
-    # Reset to original position
-    file.file.seek(current_pos)
-    
-    return file_size <= MAX_FILE_SIZE
-
-
-def get_file_size(file: UploadFile) -> int:
-    """Get file size in bytes"""
-    if not hasattr(file.file, 'seek') or not hasattr(file.file, 'tell'):
-        return 0
-    
-    current_pos = file.file.tell()
-    file.file.seek(0, 2)
-    file_size = file.file.tell()
-    file.file.seek(current_pos)
-    
-    return file_size
-
-
-def determine_document_type(filename: str) -> DocumentType:
-    """Determine document type based on filename (placeholder logic)"""
-    filename_lower = filename.lower()
-    
-    if any(keyword in filename_lower for keyword in ['invoice', 'bill', 'inv']):
-        return DocumentType.INVOICE
-    elif any(keyword in filename_lower for keyword in ['receipt', 'rec']):
-        return DocumentType.RECEIPT
-    else:
-        # Default to invoice if we can't determine
-        return DocumentType.INVOICE
-
-
-def get_file_type_from_filename(filename: str) -> FileType:
-    """Get FileType enum from filename extension"""
-    import os
-    extension = os.path.splitext(filename)[1].lower()
-    
-    if extension == ".pdf":
-        return FileType.PDF
-    elif extension in [".jpg", ".jpeg"]:
-        return FileType.JPG
-    elif extension == ".png":
-        return FileType.PNG
-    else:
-        raise ValueError(f"Unsupported file extension: {extension}")
-
-
-async def process_single_file(
-    file: UploadFile, 
-    user: User, 
-    db: Session
-) -> DocumentUploadResult:
-    """Process a single file upload"""
-    try:
-        # Basic validation
-        if not file.filename:
-            return DocumentUploadResult(
-                success=False,
-                filename=file.filename or "unknown",
-                error_message="Filename is required"
-            )
-        
-        # Validate file size
-        file_size = get_file_size(file)
-        if not validate_file_size(file):
-            return DocumentUploadResult(
-                success=False,
-                filename=file.filename,
-                error_message=f"File size exceeds limit of {MAX_FILE_SIZE / (1024*1024):.1f}MB",
-                file_size=file_size
-            )
-        
-        # Validate file type
-        azure_service = get_azure_blob_service()
-        if not azure_service.validate_file_type(file):
-            return DocumentUploadResult(
-                success=False,
-                filename=file.filename,
-                error_message="Invalid file type. Only PDF, JPG, and PNG files are allowed.",
-                file_size=file_size
-            )
-        
-        # Upload to Azure Blob Storage
-        blob_url = await azure_service.upload_file(file, user.id)
-        
-        # Determine file and document types
-        file_type = get_file_type_from_filename(file.filename)
-        document_type = determine_document_type(file.filename)
-        
-        # Create document record in database with PENDING status
-        document = Document(
-            user_id=user.id,
-            business_id=user.business_id,
-            filename=file.filename,
-            file_url=blob_url,
-            file_type=file_type,
-            document_type=document_type,
-            status=DocumentStatus.PENDING
-        )
-        
-        db.add(document)
-        db.commit()
-        db.refresh(document)
-        
-        # Dispatch OCR processing task and update status to PROCESSING
-        task_id = dispatch_ocr_task(document.id)
-        
-        # Update status to PROCESSING after successful task dispatch
-        document.status = DocumentStatus.PROCESSING
-        db.commit()
-        
-        logger.info(f"Document {document.id} queued for processing with task ID: {task_id}")
-        
-        logger.info(f"Successfully uploaded document {document.id} for user {user.id}")
-        
-        return DocumentUploadResult(
-            success=True,
-            filename=file.filename,
-            document_id=document.id,
-            blob_url=blob_url,
-            file_size=file_size,
-            file_type=file_type
-        )
-        
-    except Exception as e:
-        logger.error(f"Error processing file {file.filename}: {str(e)}")
-        return DocumentUploadResult(
-            success=False,
-            filename=file.filename or "unknown",
-            error_message=f"Upload failed: {str(e)}",
-            file_size=get_file_size(file) if file else 0
-        )
 
 
 @router.post("/upload", response_model=DocumentUploadResponse)
 async def upload_documents(
     files: List[UploadFile] = File(...),
-    current_user: User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -191,7 +49,7 @@ async def upload_documents(
     - File size must be ≤ 10MB
     - File type must be PDF, JPG, or PNG
     - Files are uploaded to Azure Blob Storage
-    - Document records are created with PENDING status
+    - models.Document records are created with PENDING status
     - OCR processing tasks are dispatched (TODO)
     
     Returns upload status for each file.
@@ -211,7 +69,7 @@ async def upload_documents(
     # Process each file
     results = []
     for file in files:
-        result = await process_single_file(file, current_user, db)
+        result = await DocumentProcessingService.process_single_file(file, current_user, db)
         results.append(result)
     
     # Calculate summary statistics
@@ -232,7 +90,8 @@ async def list_business_documents(
     per_page: int = Query(20, ge=1, le=100, description="Items per page"),
     status: Optional[DocumentStatus] = Query(None, description="Filter by document status"),
     document_type: Optional[DocumentType] = Query(None, description="Filter by document type"),
-    current_user: User = Depends(get_current_user),
+    is_reviewed: Optional[bool] = Query(None, description="Filter by review status (True=reviewed, False=not reviewed)"),
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -241,66 +100,22 @@ async def list_business_documents(
     Supports filtering by:
     - status: PENDING, PROCESSING, COMPLETED, FAILED
     - document_type: INVOICE, RECEIPT
+    - is_reviewed: True (reviewed), False (not reviewed)
     
     Returns paginated results with metadata.
     """
-    # Base query for business documents
-    query = db.query(Document).filter(Document.business_id == current_user.business_id)
-    
-    # Apply filters
-    if status:
-        query = query.filter(Document.status == status)
-    
-    if document_type:
-        query = query.filter(Document.document_type == document_type)
-    
-    # Count total items for pagination
-    total_items = query.count()
-    
-    # Calculate pagination
-    total_pages = math.ceil(total_items / per_page) if total_items > 0 else 0
-    offset = (page - 1) * per_page
-    
-    # Apply pagination and ordering (newest first)
-    documents = query.order_by(Document.created_at.desc()).offset(offset).limit(per_page).all()
-    
-    # Create pagination metadata
-    pagination = PaginationMeta(
+    return DocumentQueryService.list_business_documents(
+        db=db,
+        business_id=current_user.business_id,
         page=page,
         per_page=per_page,
-        total_items=total_items,
-        total_pages=total_pages,
-        has_next=page < total_pages,
-        has_prev=page > 1
-    )
-    
-    # Convert to response format
-    document_responses = [
-        DocumentResponse(
-            id=doc.id,
-            filename=doc.filename,
-            file_type=doc.file_type,
-            document_type=doc.document_type,
-            status=doc.status,
-            user_id=doc.user_id,
-            business_id=doc.business_id,
-            file_url=doc.file_url,
-            confidence_score=doc.confidence_score,
-            created_at=doc.created_at,
-            updated_at=doc.updated_at
-        )
-        for doc in documents
-    ]
-    
-    logger.info(f"Retrieved {len(documents)} documents for business {current_user.business_id} (page {page}/{total_pages})")
-    
-    return DocumentListResponse(
-        documents=document_responses,
-        pagination=pagination
+        status=status,
+        document_type=document_type,
+        is_reviewed=is_reviewed
     )
 
 
-def calculate_fields_summary(fields: List[ExtractedField]) -> Dict[str, Any]:
+def calculate_fields_summary(fields: List[models.ExtractedField]) -> Dict[str, Any]:
     """Calculate summary statistics for extracted fields"""
     if not fields:
         return {
@@ -353,7 +168,80 @@ def is_low_confidence(confidence: Optional[float]) -> bool:
     return confidence < 0.7
 
 
-def calculate_line_items_summary(line_items: List[LineItem]) -> Dict[str, Any]:
+def build_field_responses_with_corrections(
+    extracted_fields: List[models.ExtractedField], 
+    document_id: UUID, 
+    db: Session
+) -> List[ExtractedFieldResponse]:
+    """
+    Build field responses with corrections overlay.
+    
+    Args:
+        extracted_fields: List of models.ExtractedField objects
+        document_id: models.Document UUID
+        db: Database session
+        
+    Returns:
+        List of ExtractedFieldResponse with corrected values applied
+    """
+    # Get the latest corrections for each field (if any)
+    latest_corrections = {}
+    corrections = db.query(models.FieldCorrection).filter(
+        models.FieldCorrection.document_id == document_id
+    ).order_by(models.FieldCorrection.field_name, models.FieldCorrection.timestamp.desc()).all()
+    
+    # Build a map of latest correction per field
+    for correction in corrections:
+        if correction.field_name not in latest_corrections:
+            latest_corrections[correction.field_name] = correction
+    
+    # Convert to response format with corrected values overlay
+    field_responses = []
+    for field in extracted_fields:
+        correction = latest_corrections.get(field.field_name)
+        has_correction = correction is not None
+        
+        # If there's a correction, use corrected_value; otherwise use original value
+        display_value = correction.corrected_value if has_correction else field.value
+        
+        field_responses.append(ExtractedFieldResponse(
+            id=field.id,
+            field_name=field.field_name,
+            value=display_value,  # This shows corrected value if available, otherwise original
+            original_value=field.value,  # Always show the original OCR value
+            corrected_value=correction.corrected_value if has_correction else None,
+            confidence=field.confidence,
+            is_low_confidence=is_low_confidence(field.confidence),
+            is_corrected=has_correction,
+            created_at=field.created_at,
+            updated_at=field.updated_at
+        ))
+    
+    # Handle fields that exist only as corrections (user-added fields)
+    for field_name, correction in latest_corrections.items():
+        # Check if this correction is for a field that doesn't exist in models.ExtractedField
+        existing_field = any(f.field_name == field_name for f in extracted_fields)
+        if not existing_field:
+            # This is a user-added field that didn't exist in OCR extraction
+            field_responses.append(ExtractedFieldResponse(
+                id=0,  # No original field ID
+                field_name=field_name,
+                value=correction.corrected_value,
+                original_value=None,  # No original value since this was user-added
+                corrected_value=correction.corrected_value,
+                confidence=None,  # User-added fields have no confidence
+                is_low_confidence=False,
+                is_corrected=True,
+                created_at=correction.timestamp,
+                updated_at=correction.timestamp
+            ))
+    
+    # Sort field responses by field_name for consistent ordering
+    field_responses.sort(key=lambda x: x.field_name)
+    return field_responses
+
+
+def calculate_line_items_summary(line_items: List[models.LineItem]) -> Dict[str, Any]:
     """Calculate summary statistics for line items"""
     if not line_items:
         return {
@@ -389,14 +277,14 @@ def calculate_line_items_summary(line_items: List[LineItem]) -> Dict[str, Any]:
 @router.get("/{document_id}/fields", response_model=DocumentFieldsResponse)
 async def get_document_fields(
     document_id: UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     Get all extracted fields and line items for a specific document.
     
     Returns:
-    - Document information (status, type, confidence)
+    - models.Document information (status, type, confidence)
     - All extracted fields with confidence scores
     - All line items with details
     - Summary statistics for fields and line items
@@ -407,40 +295,29 @@ async def get_document_fields(
     - FAILED: Returns error status with empty results
     """
     # Get the document and verify ownership
-    document = db.query(Document).filter(
-        Document.id == document_id,
-        Document.business_id == current_user.business_id
+    document = db.query(models.Document).filter(
+        models.Document.id == document_id,
+        models.Document.business_id == current_user.business_id
     ).first()
     
     if not document:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found or access denied"
+            detail="models.Document not found or access denied"
         )
     
     # Get extracted fields for this document
-    extracted_fields = db.query(ExtractedField).filter(
-        ExtractedField.document_id == document_id
-    ).order_by(ExtractedField.field_name).all()
+    extracted_fields = db.query(models.ExtractedField).filter(
+        models.ExtractedField.document_id == document_id
+    ).order_by(models.ExtractedField.field_name).all()
     
     # Get line items for this document
-    line_items = db.query(LineItem).filter(
-        LineItem.document_id == document_id
-    ).order_by(LineItem.id).all()
+    line_items = db.query(models.LineItem).filter(
+        models.LineItem.document_id == document_id
+    ).order_by(models.LineItem.id).all()
     
-    # Convert to response format
-    field_responses = [
-        ExtractedFieldResponse(
-            id=field.id,
-            field_name=field.field_name,
-            value=field.value,
-            confidence=field.confidence,
-            is_low_confidence=is_low_confidence(field.confidence),
-            created_at=field.created_at,
-            updated_at=field.updated_at
-        )
-        for field in extracted_fields
-    ]
+    # Build field responses with corrections overlay
+    field_responses = build_field_responses_with_corrections(extracted_fields, document_id, db)
     
     line_item_responses = [
         LineItemResponse(
@@ -468,6 +345,9 @@ async def get_document_fields(
         business_id=document.business_id,
         file_url=document.file_url,
         confidence_score=document.confidence_score,
+        reviewed_at=document.reviewed_at,
+        reviewed_by=document.reviewed_by,
+        is_reviewed=document.reviewed_at is not None,
         created_at=document.created_at,
         updated_at=document.updated_at
     )
@@ -494,7 +374,7 @@ async def get_document_fields(
 async def correct_document_fields(
     document_id: UUID,
     corrections_request: FieldCorrectionsRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -506,33 +386,33 @@ async def correct_document_fields(
     
     Requirements:
     - User must have access to the document (same business)
-    - Document must be in COMPLETED status
+    - models.Document must be in COMPLETED status
     - At least one correction must be provided
     
     For each correction:
-    1. Log the correction in FieldCorrection table
-    2. Update or create the field in ExtractedField table
+    1. Log the correction in models.FieldCorrection table
+    2. Update or create the field in models.ExtractedField table
     3. Track success/failure for each correction
     
     Returns updated field list and correction results.
     """
     # Validate user has access to document
-    document = db.query(Document).filter(
-        Document.id == document_id,
-        Document.business_id == current_user.business_id
+    document = db.query(models.Document).filter(
+        models.Document.id == document_id,
+        models.Document.business_id == current_user.business_id
     ).first()
     
     if not document:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found or access denied"
+            detail="models.Document not found or access denied"
         )
     
     # Validate document is in COMPLETED state
     if document.status != DocumentStatus.COMPLETED:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot correct fields for document in {document.status.value} status. Document must be COMPLETED."
+            detail=f"Cannot correct fields for document in {document.status.value} status. models.Document must be COMPLETED."
         )
     
     correction_results = []
@@ -543,16 +423,16 @@ async def correct_document_fields(
     for correction_req in corrections_request.corrections:
         try:
             # Get existing field if it exists
-            existing_field = db.query(ExtractedField).filter(
-                ExtractedField.document_id == document_id,
-                ExtractedField.field_name == correction_req.field_name
+            existing_field = db.query(models.ExtractedField).filter(
+                models.ExtractedField.document_id == document_id,
+                models.ExtractedField.field_name == correction_req.field_name
             ).first()
             
             original_value = existing_field.value if existing_field else None
             was_new_field = existing_field is None
             
             # Log the correction
-            field_correction = FieldCorrection(
+            field_correction = models.FieldCorrection(
                 document_id=document_id,
                 field_name=correction_req.field_name,
                 original_value=original_value,
@@ -568,7 +448,7 @@ async def correct_document_fields(
                 message = f"Field '{correction_req.field_name}' updated successfully"
             else:
                 # Create new field for correction
-                new_field = ExtractedField(
+                new_field = models.ExtractedField(
                     document_id=document_id,
                     field_name=correction_req.field_name,
                     value=correction_req.corrected_value,
@@ -618,22 +498,12 @@ async def correct_document_fields(
             )
     
     # Get updated fields after corrections
-    updated_fields = db.query(ExtractedField).filter(
-        ExtractedField.document_id == document_id
-    ).order_by(ExtractedField.field_name).all()
+    updated_fields = db.query(models.ExtractedField).filter(
+        models.ExtractedField.document_id == document_id
+    ).order_by(models.ExtractedField.field_name).all()
     
-    field_responses = [
-        ExtractedFieldResponse(
-            id=field.id,
-            field_name=field.field_name,
-            value=field.value,
-            confidence=field.confidence,
-            is_low_confidence=is_low_confidence(field.confidence),
-            created_at=field.created_at,
-            updated_at=field.updated_at
-        )
-        for field in updated_fields
-    ]
+    # Build field responses with corrections overlay
+    field_responses = build_field_responses_with_corrections(updated_fields, document_id, db)
     
     logger.info(f"Field corrections completed for document {document_id}: {corrections_applied} applied, {corrections_failed} failed")
     
@@ -643,4 +513,158 @@ async def correct_document_fields(
         corrections_failed=corrections_failed,
         results=correction_results,
         updated_fields=field_responses
+    )
+
+
+@router.put("/{document_id}/line-items/{item_id}", response_model=LineItemUpdateResponse)
+async def update_line_item(
+    document_id: UUID,
+    item_id: int,
+    update_request: LineItemUpdateRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update a line item for a specific document.
+    
+    This endpoint allows users to edit line item details such as description,
+    quantity, unit price, and total amount. All fields are optional in the
+    request - only provided fields will be updated.
+    
+    Requirements:
+    - User must have access to the document (same business)
+    - models.Document must be in COMPLETED status
+    - Line item must exist and belong to the document
+    - At least one field must be provided for update
+    
+    Validation:
+    - Numeric fields (quantity, unit_price, total) must be non-negative
+    - Empty description is allowed (will be set to None)
+    
+    Returns updated line item details.
+    """
+    # Validate user has access to document
+    document = db.query(models.Document).filter(
+        models.Document.id == document_id,
+        models.Document.business_id == current_user.business_id
+    ).first()
+    
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="models.Document not found or access denied"
+        )
+    
+    # Validate document is in COMPLETED state
+    if document.status != DocumentStatus.COMPLETED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot edit line items for document in {document.status.value} status. models.Document must be COMPLETED."
+        )
+    
+    # Get the line item and verify it belongs to this document
+    line_item = db.query(models.LineItem).filter(
+        models.LineItem.id == item_id,
+        models.LineItem.document_id == document_id
+    ).first()
+    
+    if not line_item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Line item not found or does not belong to this document"
+        )
+    
+    # Check if at least one field is being updated
+    update_data = update_request.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one field must be provided for update"
+        )
+    
+    # Store original values for logging
+    original_values = {
+        "description": line_item.description,
+        "quantity": line_item.quantity,
+        "unit_price": line_item.unit_price,
+        "total": line_item.total
+    }
+    
+    try:
+        # Update the line item with provided fields
+        for field, value in update_data.items():
+            if hasattr(line_item, field):
+                setattr(line_item, field, value)
+        
+        # Update the timestamp
+        line_item.updated_at = func.now()
+        
+        # Commit the changes
+        db.commit()
+        db.refresh(line_item)
+        
+        # Log the update for audit purposes
+        updated_fields = list(update_data.keys())
+        logger.info(f"Line item {item_id} updated for document {document_id} by user {current_user.id}. "
+                   f"Updated fields: {updated_fields}. "
+                   f"Original values: {original_values}")
+        
+        # Create response with updated line item
+        line_item_response = LineItemResponse(
+            id=line_item.id,
+            description=line_item.description,
+            quantity=float(line_item.quantity) if line_item.quantity else None,
+            unit_price=float(line_item.unit_price) if line_item.unit_price else None,
+            total=float(line_item.total) if line_item.total else None,
+            confidence=line_item.confidence,
+            is_low_confidence=is_low_confidence(line_item.confidence),
+            created_at=line_item.created_at,
+            updated_at=line_item.updated_at
+        )
+        
+        logger.info(f"Successfully updated line item {item_id} for document {document_id}")
+        
+        return LineItemUpdateResponse(
+            success=True,
+            message=f"Line item updated successfully. Updated fields: {', '.join(updated_fields)}",
+            line_item=line_item_response,
+            document_id=document_id
+        )
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to update line item {item_id} for document {document_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update line item"
+        )
+
+
+@router.post("/{document_id}/mark-reviewed", response_model=MarkReviewedResponse)
+async def mark_document_reviewed(
+    document_id: UUID,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Mark a document as reviewed by the current user.
+    
+    This endpoint allows users to mark a document as reviewed after field validation.
+    It sets the reviewed_at timestamp and records which user performed the review.
+    
+    Requirements:
+    - User must have access to the document (same business)
+    - Document must be in COMPLETED status for review
+    - Can be marked as reviewed multiple times (updates timestamp and reviewer)
+    
+    Note: Marking as reviewed does not prevent future edits to the document.
+    It's primarily used for tracking which documents have been validated by users.
+    
+    Returns the review timestamp and reviewer information.
+    """
+    return DocumentManagementService.mark_document_reviewed(
+        db=db,
+        document_id=document_id,
+        user_id=current_user.id,
+        business_id=current_user.business_id
     )

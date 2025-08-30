@@ -69,6 +69,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - DEBUG=True
       - ENVIRONMENT=development
+      - PYTHONPATH=/app
     volumes:
       - ./backend/uploads:/var/app/data/uploads
       - ./backend/exports:/var/app/data/exports

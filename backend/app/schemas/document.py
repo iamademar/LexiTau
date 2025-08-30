@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 from uuid import UUID
 from datetime import datetime
+from decimal import Decimal
 from ..enums import FileType, DocumentType, DocumentStatus
 
 
@@ -47,6 +48,9 @@ class DocumentResponse(DocumentBase):
     business_id: int
     file_url: str
     confidence_score: Optional[float] = None
+    reviewed_at: Optional[datetime] = Field(None, description="When document was marked as reviewed")
+    reviewed_by: Optional[int] = Field(None, description="User ID who reviewed the document")
+    is_reviewed: bool = Field(description="True if document has been reviewed")
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -58,6 +62,7 @@ class DocumentFilters(BaseModel):
     """Filters for document listing"""
     status: Optional[DocumentStatus] = None
     document_type: Optional[DocumentType] = None
+    is_reviewed: Optional[bool] = Field(None, description="Filter by review status (True=reviewed, False=not reviewed)")
     
     
 class PaginationMeta(BaseModel):
@@ -81,8 +86,11 @@ class ExtractedFieldResponse(BaseModel):
     id: int
     field_name: str
     value: Optional[str] = None
+    original_value: Optional[str] = Field(None, description="Original OCR-extracted value before any corrections")
+    corrected_value: Optional[str] = Field(None, description="User-corrected value, if any corrections were made")
     confidence: Optional[float] = None
     is_low_confidence: bool = Field(description="True if confidence < 0.7")
+    is_corrected: bool = Field(description="True if field has been corrected by user")
     created_at: datetime
     updated_at: Optional[datetime] = None
     
@@ -146,3 +154,33 @@ class FieldCorrectionsResponse(BaseModel):
     corrections_failed: int
     results: List[FieldCorrectionResult]
     updated_fields: List[ExtractedFieldResponse] = Field(description="All fields after corrections applied")
+
+
+class LineItemUpdateRequest(BaseModel):
+    """Request schema for updating a line item"""
+    description: Optional[str] = Field(None, description="Product/service description")
+    quantity: Optional[Decimal] = Field(None, ge=0, description="Quantity (must be non-negative)")
+    unit_price: Optional[Decimal] = Field(None, ge=0, description="Unit price (must be non-negative)")
+    total: Optional[Decimal] = Field(None, ge=0, description="Total amount (must be non-negative)")
+
+
+class LineItemUpdateResponse(BaseModel):
+    """Response schema for line item update endpoint"""
+    success: bool
+    message: str
+    line_item: LineItemResponse = Field(description="Updated line item data")
+    document_id: UUID
+
+
+class MarkReviewedRequest(BaseModel):
+    """Request schema for marking document as reviewed (optional request body)"""
+    pass  # No required fields - marking as reviewed just sets timestamp and user
+
+
+class MarkReviewedResponse(BaseModel):
+    """Response schema for mark reviewed endpoint"""
+    success: bool
+    message: str
+    document_id: UUID
+    reviewed_at: datetime
+    reviewed_by: int = Field(description="User ID who marked document as reviewed")

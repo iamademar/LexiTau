@@ -6,7 +6,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.core.celery import celery_app
-from app.db import get_db
+from app.dependencies import get_db
 from app.models import Document, ExtractedField, LineItem
 from app.enums import DocumentStatus, DocumentType
 from app.services.azure_form_recognizer import get_azure_form_recognizer_client, DocumentExtractionError
