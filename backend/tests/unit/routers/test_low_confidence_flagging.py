@@ -5,34 +5,44 @@ Tests that fields with confidence < 0.7 are flagged as is_low_confidence = True.
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, Session
 from decimal import Decimal
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from app.main import app
 from app.models import Business, User, Document, ExtractedField, LineItem
-from app.enums import DocumentStatus, DocumentType, FileType
-from app.auth import create_access_token, create_user_and_business
-from app.test_db import get_test_db, create_test_tables, drop_test_tables
-from app.db import get_db
+from app.enums import DocumentStatus, DocumentType, FileType, DocumentClassification
+from app.auth import create_access_token, get_password_hash
+from app.db import get_db, Base
 from app.routers.documents import is_low_confidence
 
 
+# Create in-memory SQLite database for testing to avoid PostgreSQL timeout issues
+SQLITE_DATABASE_URL = "sqlite:///./test_low_confidence_flagging.db"
+engine = create_engine(SQLITE_DATABASE_URL, connect_args={"check_same_thread": False})
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+def override_get_db():
+    try:
+        db = TestingSessionLocal()
+        yield db
+    finally:
+        db.close()
+
+# Create tables and override dependency
+Base.metadata.create_all(bind=engine)
+app.dependency_overrides[get_db] = override_get_db
+
 client = TestClient(app)
-
-# Override the dependency for testing to use the test database
-app.dependency_overrides[get_db] = lambda: next(get_test_db())
-
-
-@pytest.fixture(scope="module")
-def setup_database():
-    create_test_tables()
-    yield
-    drop_test_tables()
 
 
 @pytest.fixture
-def db_session(setup_database):
-    db = next(get_test_db())
+def db_session():
+    """Create a fresh database session for each test"""
+    db = TestingSessionLocal()
     try:
         yield db
     finally:
@@ -49,12 +59,21 @@ def db_session(setup_database):
 @pytest.fixture
 def test_user_and_token(db_session):
     """Create a test user and JWT token"""
-    user = create_user_and_business(
-        db=db_session,
+    # Create business first
+    business = Business(name="Test Business")
+    db_session.add(business)
+    db_session.commit()
+    db_session.refresh(business)
+    
+    # Create user
+    user = User(
         email="testuser@example.com",
-        password="testpassword123",
-        business_name="Test Business"
+        password_hash=get_password_hash("testpassword123"),
+        business_id=business.id
     )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
     
     # Create JWT token
     token = create_access_token(data={"sub": user.email})
@@ -92,6 +111,7 @@ class TestLowConfidenceFlagging:
             file_url="https://example.com/mixed_confidence_invoice.pdf",
             file_type=FileType.PDF,
             document_type=DocumentType.INVOICE,
+            classification=DocumentClassification.EXPENSE,
             status=DocumentStatus.COMPLETED,
             confidence_score=0.75
         )
@@ -173,6 +193,7 @@ class TestLowConfidenceFlagging:
             file_url="https://example.com/mixed_line_items.pdf",
             file_type=FileType.PDF,
             document_type=DocumentType.RECEIPT,
+            classification=DocumentClassification.EXPENSE,
             status=DocumentStatus.COMPLETED,
             confidence_score=0.72
         )
@@ -276,6 +297,7 @@ class TestLowConfidenceFlagging:
             file_url="https://example.com/high_confidence_invoice.pdf",
             file_type=FileType.PDF,
             document_type=DocumentType.INVOICE,
+            classification=DocumentClassification.EXPENSE,
             status=DocumentStatus.COMPLETED,
             confidence_score=0.95
         )
@@ -325,6 +347,7 @@ class TestLowConfidenceFlagging:
             file_url="https://example.com/low_confidence_invoice.pdf",
             file_type=FileType.PDF,
             document_type=DocumentType.INVOICE,
+            classification=DocumentClassification.EXPENSE,
             status=DocumentStatus.COMPLETED,
             confidence_score=0.45
         )
@@ -374,6 +397,7 @@ class TestLowConfidenceFlagging:
             file_url="https://example.com/edge_case_confidence.pdf",
             file_type=FileType.PDF,
             document_type=DocumentType.INVOICE,
+            classification=DocumentClassification.EXPENSE,
             status=DocumentStatus.COMPLETED,
             confidence_score=0.7
         )

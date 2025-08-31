@@ -6,6 +6,9 @@ import pytest
 import uuid
 from unittest.mock import Mock, patch, AsyncMock
 from decimal import Decimal
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from app.tasks.document_tasks import (
     process_document_ocr, 
@@ -15,33 +18,8 @@ from app.tasks.document_tasks import (
     _update_document_status_failed
 )
 from app.models import Document, ExtractedField, LineItem, User, Business
-from app.enums import DocumentStatus, DocumentType, FileType
+from app.enums import DocumentStatus, DocumentType, FileType, DocumentClassification
 from app.auth import create_user_and_business
-from app.test_db import get_test_db, create_test_tables, drop_test_tables
-
-
-@pytest.fixture(scope="module")
-def setup_database():
-    create_test_tables()
-    yield
-    drop_test_tables()
-
-
-@pytest.fixture
-def db_session(setup_database):
-    db = next(get_test_db())
-    try:
-        yield db
-    finally:
-        # Clean up test data
-        db.query(LineItem).delete()
-        db.query(ExtractedField).delete()
-        db.query(Document).delete()
-        db.query(User).delete()
-        db.query(Business).delete()
-        db.commit()
-        db.close()
-
 
 @pytest.fixture
 def test_user_and_document(db_session):
@@ -62,6 +40,7 @@ def test_user_and_document(db_session):
         file_url="https://example.com/test_invoice_c3.pdf",
         file_type=FileType.PDF,
         document_type=DocumentType.INVOICE,
+        classification=DocumentClassification.REVENUE,
         status=DocumentStatus.PROCESSING,
         confidence_score=None
     )
@@ -134,11 +113,11 @@ class TestProcessDocumentOCR:
         mock_client.extract_fields = mock_extract_fields
         
         # Run the task
-        result = process_document_ocr(str(document.id))
+        result = process_document_ocr(document.id)
         
         # Verify results
         assert result["status"] == "completed"
-        assert result["document_id"] == str(document.id)
+        assert result["document_id"] == document.id
         assert result["fields_extracted"] == 4
         assert result["line_items_extracted"] == 2
         assert result["document_type"] == "INVOICE"
@@ -155,6 +134,7 @@ class TestProcessDocumentOCR:
         """Test successful OCR processing for receipt"""
         user, document = test_user_and_document
         document.document_type = DocumentType.RECEIPT
+        document.classification = DocumentClassification.EXPENSE
         
         db_session = mock_get_db.return_value.__next__.return_value
         db_session.query.return_value.filter.return_value.first.return_value = document
@@ -196,7 +176,7 @@ class TestProcessDocumentOCR:
         mock_client.extract_fields = mock_extract_fields
         
         # Run the task
-        result = process_document_ocr(str(document.id))
+        result = process_document_ocr(document.id)
         
         # Verify results
         assert result["status"] == "completed"
@@ -237,7 +217,7 @@ class TestProcessDocumentOCR:
         # Test that DocumentExtractionError is raised
         with pytest.raises(DocumentExtractionError, match="Azure API error"):
             # Call the task function directly
-            process_document_ocr(str(document.id))
+            process_document_ocr(document.id)
 
 
 class TestHelperFunctions:
@@ -349,7 +329,7 @@ class TestHelperFunctions:
         # Verify initial status
         assert document.status == DocumentStatus.PROCESSING
         
-        _update_document_status_failed(db_session, str(document.id), "Test error")
+        _update_document_status_failed(db_session, document.id, "Test error")
         
         # Refresh document from database
         db_session.refresh(document)
@@ -379,6 +359,7 @@ class TestTaskIntegration:
             file_url="https://example.com/integration_test.pdf",
             file_type=FileType.PDF,
             document_type=DocumentType.INVOICE,
+            classification=DocumentClassification.REVENUE,
             status=DocumentStatus.PROCESSING
         )
         
@@ -416,8 +397,7 @@ class TestTaskIntegration:
         with patch('app.tasks.document_tasks.get_db') as mock_get_db:
             mock_get_db.return_value.__next__.return_value = db_session
             
-            # Run the task function directly
-            result = process_document_ocr(str(document.id))
+            result = process_document_ocr(document.id)
         
         # Verify task result
         assert result["status"] == "completed"
