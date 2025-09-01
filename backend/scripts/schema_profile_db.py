@@ -1,0 +1,347 @@
+# scripts/profile_db.py
+# Portable DB profiler (SQLAlchemy) — prints JSON lines, one ColumnProfile per column.
+# Uses DATABASE_URL if present, otherwise pass --url
+#   export DATABASE_URL="postgresql+psycopg2://user:pass@host:5432/dbname"
+#   docker-compose exec fastapi python -u scripts/profile_db.py --tables documents,clients
+
+from __future__ import annotations
+import argparse, datetime as dt, hashlib, json, os, random, sys
+from dataclasses import dataclass, asdict, field
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from sqlalchemy import create_engine, MetaData, Table, select, func, text, cast
+from sqlalchemy.engine import Engine
+from sqlalchemy.sql.elements import ColumnClause
+from sqlalchemy.types import (
+    Integer, BigInteger, SmallInteger, Numeric, Float, DECIMAL,
+    Date, DateTime, Time, String, Text, Unicode, UnicodeText, LargeBinary, Boolean
+)
+
+# ------------------ CONFIG (tweak as needed) ------------------
+TOP_K = 10                              # number of most frequent values to keep
+DISTINCT_SAMPLE_MAX = 10_000            # cap of distinct values sampled per column (for sketches)
+MINHASH_PERM = 128                      # number of hash functions in minhash sketch
+NULL_STRING = "<NULL>"                  # canonical null marker for profiles
+TEXT_SAMPLE_FOR_SHAPE = 5_000           # rows to sample for char-class stats
+PREFIX_LEN = 3                          # prefix length for common_prefixes
+PREFIX_TOP = 5                          # how many prefixes to keep
+RANDOM_SEED = 1337                      # reproducibility for sampling
+# --------------------------------------------------------------
+
+# --------- CLI & debug ----------
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Database profiler — prints ColumnProfile JSON lines.")
+    p.add_argument("--url", help="SQLAlchemy DB URL. If omitted, uses $DATABASE_URL.", default=None)
+    p.add_argument("--tables", help="Comma-separated allowlist of tables to profile.", default=None)
+    p.add_argument("--schema", help="DB schema to reflect (e.g., public). Default: DB default.", default=None)
+    p.add_argument("--jsonl-out", help="Optional path to write JSONL output (in addition to stdout).", default=None)
+    p.add_argument("--debug", action="store_true", help="Print debug info to stderr.")
+    return p.parse_args()
+
+DEBUG = False
+def dbg(msg: str):
+    if DEBUG:
+        print(f"[profile_db] {msg}", file=sys.stderr, flush=True)
+
+# --------- dataclasses ----------
+@dataclass
+class ShapeInfo:
+    min_value: Optional[Any] = None
+    max_value: Optional[Any] = None
+    length_min: Optional[int] = None
+    length_max: Optional[int] = None
+    char_classes: Dict[str, int] = field(default_factory=dict)
+    common_prefixes: List[Tuple[str, int]] = field(default_factory=list)
+
+@dataclass
+class ColumnProfile:
+    table_name: str
+    column_name: str
+    data_type: str
+    table_row_count: int
+    null_count: int
+    non_null_count: int
+    distinct_count: Optional[float]
+    shape: ShapeInfo
+    top_k_values: List[Tuple[str, int]]
+    distinct_sample: List[str]
+    minhash_signature: List[int]
+    generated_at: str
+
+# --------- MinHash ----------
+class MinHasher:
+    """Simple MinHash using blake2b with different seeds (no extra deps)."""
+    def __init__(self, num_perm: int = 128):
+        self.num_perm = num_perm
+        rng = random.Random(RANDOM_SEED)
+        self.seeds = [rng.getrandbits(64).to_bytes(8, "little") for _ in range(num_perm)]
+        self.signature = [2**64 - 1] * num_perm
+
+    def _h(self, val_bytes: bytes, seed_bytes: bytes) -> int:
+        h = hashlib.blake2b(val_bytes, digest_size=8, person=seed_bytes)
+        return int.from_bytes(h.digest(), "big", signed=False)
+
+    def update(self, val: str) -> None:
+        b = val.encode("utf-8", errors="ignore")
+        for i, seed in enumerate(self.seeds):
+            hv = self._h(b, seed)
+            if hv < self.signature[i]:
+                self.signature[i] = hv
+
+    def digest(self) -> List[int]:
+        return self.signature[:]
+
+# --------- type helpers ----------
+def is_numeric(sa_type) -> bool:
+    return isinstance(sa_type, (Integer, BigInteger, SmallInteger, Numeric, Float, DECIMAL))
+
+def is_textual(sa_type) -> bool:
+    return isinstance(sa_type, (String, Text, Unicode, UnicodeText))
+
+def is_temporal(sa_type) -> bool:
+    return isinstance(sa_type, (Date, DateTime, Time))
+
+def safe_type_name(sa_type) -> str:
+    return getattr(sa_type, "__class__", type(sa_type)).__name__
+
+def supports_random(engine: Engine) -> str:
+    name = engine.dialect.name
+    if name in ("postgresql", "duckdb", "redshift"): return "random()"
+    if name in ("sqlite",): return "RANDOM()"
+    if name in ("mysql", "mariadb"): return "RAND()"
+    return "random()"
+
+# --------- SQL helpers ----------
+def count_rows(engine: Engine, table: Table) -> int:
+    q = select(func.count()).select_from(table)
+    with engine.connect() as cxn:
+        return int(cxn.execute(q).scalar_one())
+
+def null_vs_nonnull(engine: Engine, table: Table, col: ColumnClause) -> Tuple[int, int]:
+    q = select(
+        func.count().filter(col.is_(None)),
+        func.count().filter(col.is_not(None))
+    ).select_from(table)
+    with engine.connect() as cxn:
+        nulls, nonnulls = cxn.execute(q).one()
+        return int(nulls or 0), int(nonnulls or 0)
+
+def distinct_count(engine: Engine, table: Table, col: ColumnClause) -> int:
+    q = select(func.count(func.distinct(col))).select_from(table).where(col.is_not(None))
+    with engine.connect() as cxn:
+        return int(cxn.execute(q).scalar_one() or 0)
+
+def min_max_numeric(engine: Engine, table: Table, col: ColumnClause) -> Tuple[Optional[Any], Optional[Any]]:
+    q = select(func.min(col), func.max(col)).where(col.is_not(None)).select_from(table)
+    with engine.connect() as cxn:
+        return cxn.execute(q).one()
+
+def min_max_lex(engine: Engine, table: Table, col: ColumnClause) -> Tuple[Optional[str], Optional[str]]:
+    # Cast to TEXT for portability across UUID/JSON/BOOL/etc.
+    q = select(
+        func.min(cast(col, String())),
+        func.max(cast(col, String()))
+    ).where(col.is_not(None)).select_from(table)
+    with engine.connect() as cxn:
+        return cxn.execute(q).one()
+
+
+def length_range(engine: Engine, table: Table, col: ColumnClause) -> Tuple[Optional[int], Optional[int]]:
+    # Cast to TEXT so enums/uuids/etc. work
+    q = select(
+        func.min(func.length(cast(col, String()))),
+        func.max(func.length(cast(col, String())))
+    ).where(col.is_not(None)).select_from(table)
+    with engine.connect() as cxn:
+        return cxn.execute(q).one()
+
+
+def topk(engine: Engine, table: Table, col: ColumnClause, k: int) -> List[Tuple[str, int]]:
+    ident = engine.dialect.identifier_preparer.format_column(col)
+    q = text(f"""
+        SELECT {ident} AS v, COUNT(*) AS n
+        FROM {table.name}
+        WHERE {ident} IS NOT NULL
+        GROUP BY v
+        ORDER BY n DESC
+        LIMIT :k
+    """)
+    with engine.connect() as cxn:
+        rows = cxn.execute(q, {"k": k}).fetchall()
+    return [(NULL_STRING if v is None else str(v), int(n)) for v, n in rows]
+
+def distinct_sample(engine: Engine, table: Table, col: ColumnClause, limit: int) -> List[str]:
+    ident = engine.dialect.identifier_preparer.format_column(col)
+    rnd = supports_random(engine)
+    q = text(f"""
+        SELECT {ident} AS v
+        FROM (
+          SELECT DISTINCT {ident} AS {ident}
+          FROM {table.name}
+          WHERE {ident} IS NOT NULL
+        ) d
+        ORDER BY {rnd}
+        LIMIT :lim
+    """)
+    with engine.connect() as cxn:
+        return [NULL_STRING if r[0] is None else str(r[0]) for r in cxn.execute(q, {"lim": limit}).fetchall()]
+
+def sample_nonnull_values(engine: Engine, table: Table, col: ColumnClause, limit: int) -> List[str]:
+    ident = engine.dialect.identifier_preparer.format_column(col)
+    rnd = supports_random(engine)
+    q = text(f"""
+        SELECT {ident} AS v
+        FROM {table.name}
+        WHERE {ident} IS NOT NULL
+        ORDER BY {rnd}
+        LIMIT :lim
+    """)
+    with engine.connect() as cxn:
+        return [str(r[0]) for r in cxn.execute(q, {"lim": limit}).fetchall()]
+
+def char_class_counts_from_sample(values: Sequence[str]) -> Dict[str, int]:
+    import string
+    digits_only = alpha_only = has_punct = has_space = mixed = 0
+    punct_set = set(string.punctuation)
+    for v in values:
+        if v is None: continue
+        s = str(v)
+        if not s: continue
+        is_digits = all(ch.isdigit() for ch in s)
+        is_alpha  = all(ch.isalpha() for ch in s)
+        punct = any(ch in punct_set for ch in s)
+        space = any(ch.isspace() for ch in s)
+        if is_digits: digits_only += 1
+        if is_alpha:  alpha_only += 1
+        if punct:     has_punct += 1
+        if space:     has_space += 1
+        if not (is_digits or is_alpha): mixed += 1
+    return {"digits_only": digits_only, "alpha_only": alpha_only, "has_punct": has_punct,
+            "has_space": has_space, "mixed": mixed, "total": len(values)}
+
+def common_prefixes(values: Sequence[str], prefix_len: int, top: int) -> List[Tuple[str, int]]:
+    from collections import Counter
+    prefs = Counter([str(v)[:prefix_len] for v in values if v])
+    return prefs.most_common(top)
+
+# --------- core profiling ----------
+def profile_column(engine: Engine, table: Table, col_name: str, table_row_count: int) -> ColumnProfile:
+    col = table.c[col_name]
+    dtype = safe_type_name(col.type)
+
+    nulls, nonnulls = null_vs_nonnull(engine, table, col)
+    dc = distinct_count(engine, table, col)
+
+    shape = ShapeInfo()
+
+    if is_numeric(col.type):
+        min_v, max_v = min_max_numeric(engine, table, col)
+
+    elif is_textual(col.type):
+        min_v, max_v = min_max_lex(engine, table, col)
+        len_min, len_max = length_range(engine, table, col)
+        shape.length_min = int(len_min) if len_min is not None else None
+        shape.length_max = int(len_max) if len_max is not None else None
+        vals_sample = sample_nonnull_values(engine, table, col, limit=min(TEXT_SAMPLE_FOR_SHAPE, max(1000, TOP_K * 20)))
+        shape.char_classes = char_class_counts_from_sample(vals_sample)
+        shape.common_prefixes = common_prefixes(vals_sample, prefix_len=PREFIX_LEN, top=PREFIX_TOP)
+
+    elif is_temporal(col.type) or isinstance(col.type, Boolean):
+        min_v, max_v = min_max_lex(engine, table, col)
+
+    else:
+        min_v, max_v = min_max_lex(engine, table, col)
+
+    shape.min_value, shape.max_value = min_v, max_v
+
+    topk_vals = topk(engine, table, col, TOP_K)
+    sample_vals = distinct_sample(engine, table, col, limit=DISTINCT_SAMPLE_MAX)
+
+    mh = MinHasher(num_perm=MINHASH_PERM)
+    for v in sample_vals: mh.update(v)
+    sig = mh.digest()
+
+    return ColumnProfile(
+        table_name=table.name,
+        column_name=col_name,
+        data_type=dtype,
+        table_row_count=table_row_count,
+        null_count=int(nulls),
+        non_null_count=int(nonnulls),
+        distinct_count=float(dc),
+        shape=shape,
+        top_k_values=topk_vals,
+        distinct_sample=sample_vals,
+        minhash_signature=[int(x) for x in sig],
+        generated_at=dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    )
+
+def profile_database(engine: Engine, only_tables: Optional[Sequence[str]] = None, schema: Optional[str] = None,
+                     out_path: Optional[str] = None) -> List[ColumnProfile]:
+    md = MetaData(schema=schema) if schema else MetaData()
+    profiles: List[ColumnProfile] = []
+
+    # Reflect only selected tables if provided (faster & avoids system tables)
+    tables: List[Table] = []
+    if only_tables:
+        for name in [t.strip() for t in only_tables if t.strip()]:
+            tables.append(Table(name, md, autoload_with=engine, schema=schema))
+    else:
+        md.reflect(bind=engine, schema=schema)
+        tables = list(md.sorted_tables)
+
+    dbg(f"dialect={engine.dialect.name} schema={schema or '(default)'}")
+    dbg(f"tables_found={ [t.name for t in tables] }")
+    if not tables:
+        print("[profile_db] No tables matched the filter; nothing to profile.", file=sys.stderr, flush=True)
+        return profiles
+
+    fh = sys.stdout
+    fobj = None
+    if out_path:
+        fobj = open(out_path, "w", encoding="utf-8")
+        dbg(f"Writing JSONL to {out_path}")
+
+    for t in tables:
+        try:
+            row_count = count_rows(engine, t)
+        except Exception as e:
+            print(f"[profile_db] SKIP table={t.name} (row count failed: {e})", file=sys.stderr, flush=True)
+            continue
+        for col in t.columns:
+            if isinstance(col.type, LargeBinary):
+                dbg(f"SKIP column {t.name}.{col.name} (LargeBinary)")
+                continue
+            try:
+                cp = profile_column(engine, t, col.name, row_count)
+                line = json.dumps(asdict(cp), default=str)
+                print(line, file=fh, flush=True)
+                if fobj:
+                    print(line, file=fobj, flush=True)
+                profiles.append(cp)
+            except Exception as e:
+                print(f"[profile_db] ERROR {t.name}.{col.name}: {e}", file=sys.stderr, flush=True)
+    if fobj:
+        fobj.close()
+    return profiles
+
+# --------- main ----------
+def main() -> None:
+    global DEBUG
+    args = parse_args()
+    DEBUG = bool(args.debug)
+
+    url = args.url or os.getenv("DATABASE_URL")
+    if not url:
+        print("ERROR: Provide --url or set DATABASE_URL", file=sys.stderr, flush=True)
+        sys.exit(2)
+
+    engine = create_engine(url, future=True)
+    only_tables = [t.strip() for t in args.tables.split(",")] if args.tables else None
+
+    random.seed(RANDOM_SEED)
+    profile_database(engine, only_tables=only_tables, schema=args.schema, out_path=args.jsonl_out)
+
+if __name__ == "__main__":
+    main()
+

@@ -1,6 +1,9 @@
 # Import and re-export all models for backward compatibility
 # This maintains the same public API while enabling the layer-based structure
 
+# Import Base from db module
+from ..db import Base
+
 # Import all models from their individual files
 from .user import User
 from .business import Business
@@ -14,6 +17,7 @@ from .category import Category
 
 # Ensure all models are available at package level
 __all__ = [
+    "Base",
     "User",
     "Business", 
     "Document",
