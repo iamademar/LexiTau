@@ -1,4 +1,4 @@
-# scripts/profile_db.py
+# scripts/schema_profile_db.py
 # Portable DB profiler (SQLAlchemy) — prints JSON lines, one ColumnProfile per column.
 # Uses DATABASE_URL if present, otherwise pass --url
 #   export DATABASE_URL="postgresql+psycopg2://user:pass@host:5432/dbname"
@@ -16,6 +16,10 @@ from sqlalchemy.types import (
     Integer, BigInteger, SmallInteger, Numeric, Float, DECIMAL,
     Date, DateTime, Time, String, Text, Unicode, UnicodeText, LargeBinary, Boolean
 )
+
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+
 
 # ------------------ CONFIG (tweak as needed) ------------------
 TOP_K = 10                              # number of most frequent values to keep
@@ -273,8 +277,82 @@ def profile_column(engine: Engine, table: Table, col_name: str, table_row_count:
         top_k_values=topk_vals,
         distinct_sample=sample_vals,
         minhash_signature=[int(x) for x in sig],
-        generated_at=dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        generated_at=dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
     )
+
+def profile_to_english_description(profile: ColumnProfile) -> str:
+    parts = []
+
+    # Basic stats (same as before)
+    parts.append(f"Column {profile.column_name} has {profile.null_count} NULL values out of {profile.table_row_count} records.")
+    
+    # Use ALL ShapeInfo fields
+    if profile.shape.length_min is not None and profile.shape.length_max is not None:
+        if profile.shape.length_min == profile.shape.length_max:
+            parts.append(f"All values are exactly {profile.shape.length_min} characters long.")
+        else:
+            parts.append(f"Value lengths range from {profile.shape.length_min} to {profile.shape.length_max} characters.")
+    
+    if profile.shape.common_prefixes:
+        prefixes = [f"'{p}' ({c} times)" for p, c in profile.shape.common_prefixes[:3]]
+        parts.append(f"Most common prefixes: {', '.join(prefixes)}.")
+    
+    # Enhanced char_classes usage
+    if profile.shape.char_classes and profile.shape.char_classes.get('total', 0) > 0:
+        total = profile.shape.char_classes['total']
+        patterns = []
+        if profile.shape.char_classes.get('digits_only', 0) / total > 0.8:
+            patterns.append("mostly numeric")
+        if profile.shape.char_classes.get('alpha_only', 0) / total > 0.8:
+            patterns.append("mostly alphabetic")
+        if profile.shape.char_classes.get('has_punct', 0) / total > 0.5:
+            patterns.append("often contains punctuation")
+        
+        if patterns:
+            parts.append(f"Values are {', '.join(patterns)}.")
+    
+    return " ".join(parts)
+
+
+def generate_short_summary(english_desc: str, column_name: str, 
+                         table_name: str, other_columns: List[str]) -> str:
+    """
+    Generate a short summary of what a column contains using LLM.
+    Requires OPENAI_API_KEY environment variable to be set.
+    """
+
+    # Initialize the ChatOpenAI model
+    llm = ChatOpenAI(
+        model="gpt-4o",
+        temperature=0.0  # Keep it deterministic for consistent summaries
+    )
+        
+    # Create the prompt template
+    prompt = ChatPromptTemplate.from_template("""
+Given this database column information, provide a brief 1-2 sentence description of what this field likely contains:
+
+Column: {column_name}
+Table: {table_name}
+Other columns in table: {other_columns}
+Detailed profile: {english_desc}
+
+Generate a concise summary focusing on the business purpose and data content. Be direct and avoid technical jargon.
+""")
+        
+    # Create the chain and run it
+    chain = prompt | llm
+    
+    # Run the chain with the input variables
+    response = chain.invoke({
+        "column_name": column_name,
+        "table_name": table_name,
+        "other_columns": ", ".join(other_columns),
+        "english_desc": english_desc
+    })
+    
+    # Extract the content from the response
+    return response.content.strip()
+
 
 def profile_database(engine: Engine, only_tables: Optional[Sequence[str]] = None, schema: Optional[str] = None,
                      out_path: Optional[str] = None) -> List[ColumnProfile]:
@@ -308,13 +386,22 @@ def profile_database(engine: Engine, only_tables: Optional[Sequence[str]] = None
         except Exception as e:
             print(f"[profile_db] SKIP table={t.name} (row count failed: {e})", file=sys.stderr, flush=True)
             continue
+        
+        # Get all column names for context
+        other_columns = [col.name for col in t.columns if not isinstance(col.type, LargeBinary)]
+        
         for col in t.columns:
             if isinstance(col.type, LargeBinary):
                 dbg(f"SKIP column {t.name}.{col.name} (LargeBinary)")
                 continue
             try:
                 cp = profile_column(engine, t, col.name, row_count)
-                line = json.dumps(asdict(cp), default=str)
+                english_desc = profile_to_english_description(cp)
+                
+                # Generate LLM summary
+                other_cols = [c for c in other_columns if c != col.name]
+                line = generate_short_summary(english_desc, col.name, t.name, other_cols)
+                
                 print(line, file=fh, flush=True)
                 if fobj:
                     print(line, file=fobj, flush=True)
@@ -336,6 +423,10 @@ def main() -> None:
         print("ERROR: Provide --url or set DATABASE_URL", file=sys.stderr, flush=True)
         sys.exit(2)
 
+    # Convert asyncpg URL to psycopg2 for synchronous operation
+    if "postgresql+asyncpg://" in url:
+        url = url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+    
     engine = create_engine(url, future=True)
     only_tables = [t.strip() for t in args.tables.split(",")] if args.tables else None
 
