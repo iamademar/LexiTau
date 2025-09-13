@@ -20,6 +20,11 @@ from sqlalchemy.types import (
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
+# Database imports for saving profiles
+from sqlalchemy.orm import sessionmaker
+from app.models.column_profile import ColumnProfile as ColumnProfileModel
+from app.schemas.column_profile import ColumnProfileCreate
+
 
 # ------------------ CONFIG (tweak as needed) ------------------
 TOP_K = 10                              # number of most frequent values to keep
@@ -34,12 +39,13 @@ RANDOM_SEED = 1337                      # reproducibility for sampling
 
 # --------- CLI & debug ----------
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Database profiler — prints ColumnProfile JSON lines.")
+    p = argparse.ArgumentParser(description="Database profiler — prints ColumnProfile JSON lines and saves to database.")
     p.add_argument("--url", help="SQLAlchemy DB URL. If omitted, uses $DATABASE_URL.", default=None)
     p.add_argument("--tables", help="Comma-separated allowlist of tables to profile.", default=None)
     p.add_argument("--schema", help="DB schema to reflect (e.g., public). Default: DB default.", default=None)
     p.add_argument("--jsonl-out", help="Optional path to write JSONL output (in addition to stdout).", default=None)
     p.add_argument("--debug", action="store_true", help="Print debug info to stderr.")
+    p.add_argument("--database-name", help="Name of the database being profiled. Defaults to database name from URL.")
     return p.parse_args()
 
 DEBUG = False
@@ -354,8 +360,76 @@ Generate a concise summary focusing on the business purpose and data content. Be
     return response.content.strip()
 
 
+def convert_to_pydantic_schema(cp: ColumnProfile, english_desc: str, 
+                              short_summary: str, long_summary: str,
+                              database_name: str) -> ColumnProfileCreate:
+    """Convert ColumnProfile dataclass to ColumnProfileCreate Pydantic model"""
+    
+    # Convert top_k_values from List[Tuple[str, int]] to List[Dict[str, Any]]
+    top_k_dicts = [{"value": val, "count": count} for val, count in cp.top_k_values]
+    
+    # Convert common_prefixes from List[Tuple[str, int]] to List[Dict[str, Any]]
+    prefix_dicts = [{"prefix": prefix, "count": count} for prefix, count in cp.shape.common_prefixes]
+    
+    return ColumnProfileCreate(
+        database_name=database_name,
+        table_name=cp.table_name,
+        column_name=cp.column_name,
+        data_type=cp.data_type,
+        table_row_count=cp.table_row_count,
+        null_count=cp.null_count,
+        non_null_count=cp.non_null_count,
+        distinct_count=cp.distinct_count,
+        
+        # Shape information
+        min_value=str(cp.shape.min_value) if cp.shape.min_value is not None else None,
+        max_value=str(cp.shape.max_value) if cp.shape.max_value is not None else None,
+        length_min=cp.shape.length_min,
+        length_max=cp.shape.length_max,
+        char_classes=cp.shape.char_classes if cp.shape.char_classes else None,
+        common_prefixes=prefix_dicts if prefix_dicts else None,
+        
+        # Value samples
+        top_k_values=top_k_dicts if top_k_dicts else None,
+        distinct_sample=cp.distinct_sample if cp.distinct_sample else None,
+        minhash_signature=cp.minhash_signature if cp.minhash_signature else None,
+        
+        # Generated descriptions
+        english_description=english_desc,
+        short_summary=short_summary,
+        long_summary=long_summary,
+        vector_embedding=None,  # You might want to generate this separately
+        
+        generated_at=dt.datetime.fromisoformat(cp.generated_at.replace('Z', '+00:00'))
+    )
+
+
+def save_profile_to_db(session, profile_data: ColumnProfileCreate) -> None:
+    """Save a column profile to the database"""
+    # Check if profile already exists (upsert behavior)
+    existing = session.query(ColumnProfileModel).filter_by(
+        database_name=profile_data.database_name,
+        table_name=profile_data.table_name,
+        column_name=profile_data.column_name
+    ).first()
+    
+    if existing:
+        # Update existing record
+        for key, value in profile_data.model_dump().items():
+            if key != 'id':  # Don't update the ID
+                setattr(existing, key, value)
+        dbg(f"Updated existing profile for {profile_data.table_name}.{profile_data.column_name}")
+    else:
+        # Insert new record
+        db_profile = ColumnProfileModel(**profile_data.model_dump())
+        session.add(db_profile)
+        dbg(f"Created new profile for {profile_data.table_name}.{profile_data.column_name}")
+    
+    session.commit()
+
+
 def profile_database(engine: Engine, only_tables: Optional[Sequence[str]] = None, schema: Optional[str] = None,
-                     out_path: Optional[str] = None) -> List[ColumnProfile]:
+                     out_path: Optional[str] = None, db_session=None, database_name: str = None) -> List[ColumnProfile]:
     md = MetaData(schema=schema) if schema else MetaData()
     profiles: List[ColumnProfile] = []
 
@@ -400,11 +474,26 @@ def profile_database(engine: Engine, only_tables: Optional[Sequence[str]] = None
                 
                 # Generate LLM summary
                 other_cols = [c for c in other_columns if c != col.name]
-                line = generate_short_summary(english_desc, col.name, t.name, other_cols)
+                short_summary = generate_short_summary(english_desc, col.name, t.name, other_cols)
                 
-                print(line, file=fh, flush=True)
+                # Combine both descriptions
+                long_summary = f"{short_summary} {english_desc}"
+                
+                print(long_summary, file=fh, flush=True)
                 if fobj:
-                    print(line, file=fobj, flush=True)
+                    print(long_summary, file=fobj, flush=True)
+                
+                # Save to database if session and database name are provided
+                if db_session and database_name:
+                    try:
+                        profile_schema = convert_to_pydantic_schema(
+                            cp, english_desc, short_summary, long_summary, database_name
+                        )
+                        save_profile_to_db(db_session, profile_schema)
+                        dbg(f"Saved profile for {t.name}.{col.name} to database")
+                    except Exception as db_error:
+                        print(f"[profile_db] DB SAVE ERROR {t.name}.{col.name}: {db_error}", file=sys.stderr, flush=True)
+                
                 profiles.append(cp)
             except Exception as e:
                 print(f"[profile_db] ERROR {t.name}.{col.name}: {e}", file=sys.stderr, flush=True)
@@ -430,8 +519,27 @@ def main() -> None:
     engine = create_engine(url, future=True)
     only_tables = [t.strip() for t in args.tables.split(",")] if args.tables else None
 
+    # Set up database session for saving profiles (using same database)
+    Session = sessionmaker(bind=engine)
+    db_session = Session()
+    
+    # Extract database name from URL or use provided name
+    database_name = args.database_name or engine.url.database
+
     random.seed(RANDOM_SEED)
-    profile_database(engine, only_tables=only_tables, schema=args.schema, out_path=args.jsonl_out)
+    
+    try:
+        profile_database(
+            engine, 
+            only_tables=only_tables, 
+            schema=args.schema, 
+            out_path=args.jsonl_out,
+            db_session=db_session,
+            database_name=database_name
+        )
+    finally:
+        if db_session:
+            db_session.close()
 
 if __name__ == "__main__":
     main()

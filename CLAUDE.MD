@@ -28,15 +28,15 @@ alwaysApply: true
 - When asked to run with development environment, use: `docker-compose --env-file .env.dev up -d`
 
 ### Database Access
-- When asked to connect to the main database, use: `docker-compose exec postgres psql -U postgres -d lexextract`
-- When asked to connect to the test database, use: `docker-compose exec postgres_test psql -U postgres -d lexextract_test`
-- When asked to view database tables, use: `docker-compose exec postgres psql -U postgres -d lexextract -c "\dt"`
-- When asked to describe a table structure, use: `docker-compose exec postgres psql -U postgres -d lexextract -c "\d {table_name}"`
-- When asked to run SQL queries, prefix with: `docker-compose exec postgres psql -U postgres -d lexextract -c "`
+- When asked to connect to the main database, use: `docker-compose exec postgres psql -U postgres -d lexitau`
+- When asked to connect to the test database, use: `docker-compose exec postgres_test psql -U postgres -d lexitau_test`
+- When asked to view database tables, use: `docker-compose exec postgres psql -U postgres -d lexitau -c "\dt"`
+- When asked to describe a table structure, use: `docker-compose exec postgres psql -U postgres -d lexitau -c "\d {table_name}"`
+- When asked to run SQL queries, prefix with: `docker-compose exec postgres psql -U postgres -d lexitau -c "`
 
 ### Database Operations
-- When asked to backup database, use: `docker-compose exec postgres pg_dump -U postgres lexextract > backup.sql`
-- When asked to restore database, use: `docker-compose exec -T postgres psql -U postgres lexextract < backup.sql`
+- When asked to backup database, use: `docker-compose exec postgres pg_dump -U postgres lexitau > backup.sql`
+- When asked to restore database, use: `docker-compose exec -T postgres psql -U postgres lexitau < backup.sql`
 - When asked to run migrations (if using Alembic), use: `docker-compose exec fastapi alembic upgrade head`
 - When asked to create new migration, use: `docker-compose exec fastapi alembic revision --autogenerate -m "description"`
 

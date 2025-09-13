@@ -14,6 +14,7 @@ from .field_correction import FieldCorrection
 from .client import Client
 from .project import Project
 from .category import Category
+from .column_profile import ColumnProfile
 
 # Ensure all models are available at package level
 __all__ = [
@@ -26,5 +27,6 @@ __all__ = [
     "FieldCorrection",
     "Client",
     "Project",
-    "Category"
+    "Category",
+    "ColumnProfile"
 ]
