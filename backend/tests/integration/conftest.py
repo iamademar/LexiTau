@@ -4,6 +4,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+
+# Import all models to ensure they're registered with Base
+from app.models import *
 from app.main import app
 from app.db import Base, get_db
 
@@ -50,3 +53,8 @@ def _override_get_db(db_session):
 @pytest.fixture
 def client():
     return TestClient(app)
+
+@pytest.fixture
+def test_engine():
+    """Provide the test database engine for vanna service tests."""
+    return engine

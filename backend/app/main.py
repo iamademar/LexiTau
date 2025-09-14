@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routers import auth, documents, tags
+from .routers import auth, documents, tags, vanna
 
 app = FastAPI(
     title="LexiTau API",
@@ -20,6 +20,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(documents.router)
 app.include_router(tags.router)
+app.include_router(vanna.router)
 
 @app.get("/health")
 async def health_check():

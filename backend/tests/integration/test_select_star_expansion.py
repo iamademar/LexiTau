@@ -5,20 +5,20 @@ from app.services.vanna_service import guard_and_rewrite_sql
 
 
 @pytest.mark.integration
-def test_select_star_single_table_expansion():
+def test_select_star_single_table_expansion(test_engine):
     """Test that SELECT * from single table expands to explicit columns."""
     # SQL with SELECT * from single table
     sql = "SELECT * FROM public.documents WHERE business_id = :business_id AND documents.business_id = :business_id"
     business_id = 1
 
-    final_sql, guard_flags, metadata = guard_and_rewrite_sql(sql, business_id)
+    final_sql, guard_flags, metadata = guard_and_rewrite_sql(sql, business_id, engine=test_engine)
 
     # Should expand * to actual column names from documents table
     assert "SELECT *" not in final_sql
 
     # Should contain document table columns with table_column aliases
     expected_columns = [
-        "documents_id", "documents_name", "documents_created_at",
+        "documents_id", "documents_filename", "documents_created_at",
         "documents_business_id", "documents_client_id"
     ]
 
@@ -35,7 +35,7 @@ def test_select_star_single_table_expansion():
 
 
 @pytest.mark.integration
-def test_select_star_join_expansion():
+def test_select_star_join_expansion(test_engine):
     """Test that SELECT * from JOIN expands columns from both tables."""
     sql = """
     SELECT *
@@ -47,13 +47,13 @@ def test_select_star_join_expansion():
     """
     business_id = 1
 
-    final_sql, guard_flags, metadata = guard_and_rewrite_sql(sql, business_id)
+    final_sql, guard_flags, metadata = guard_and_rewrite_sql(sql, business_id, engine=test_engine)
 
     # Should expand * to columns from both tables
     assert "SELECT *" not in final_sql
 
     # Should contain columns from documents table with 'd' alias
-    expected_d_columns = ["d_id", "d_name", "d_created_at", "d_business_id", "d_client_id"]
+    expected_d_columns = ["d_id", "d_filename", "d_created_at", "d_business_id", "d_client_id"]
     for column_alias in expected_d_columns:
         assert column_alias in final_sql
 
@@ -72,23 +72,23 @@ def test_select_star_join_expansion():
 
 
 @pytest.mark.integration
-def test_select_star_with_explicit_columns():
+def test_select_star_with_explicit_columns(test_engine):
     """Test that mixed SELECT * and explicit columns work correctly."""
     sql = """
-    SELECT *, d.name as document_name
+    SELECT *, d.filename as document_name
     FROM public.documents d
     WHERE business_id = :business_id AND d.business_id = :business_id
     """
     business_id = 1
 
-    final_sql, guard_flags, metadata = guard_and_rewrite_sql(sql, business_id)
+    final_sql, guard_flags, metadata = guard_and_rewrite_sql(sql, business_id, engine=test_engine)
 
     # Should expand * but keep explicit column
     assert "SELECT *" not in final_sql
     assert "document_name" in final_sql
 
     # Should contain expanded columns from documents table
-    expected_columns = ["d_id", "d_name", "d_created_at", "d_business_id"]
+    expected_columns = ["d_id", "d_filename", "d_created_at", "d_business_id"]
     for column_alias in expected_columns:
         assert column_alias in final_sql
 
@@ -97,13 +97,13 @@ def test_select_star_with_explicit_columns():
 
 
 @pytest.mark.integration
-def test_select_star_column_exclusions():
+def test_select_star_column_exclusions(test_engine):
     """Test that excluded columns are not included in expansion."""
     # This test assumes that certain columns are excluded via settings
     sql = "SELECT * FROM public.documents WHERE business_id = :business_id AND documents.business_id = :business_id"
     business_id = 1
 
-    final_sql, guard_flags, metadata = guard_and_rewrite_sql(sql, business_id)
+    final_sql, guard_flags, metadata = guard_and_rewrite_sql(sql, business_id, engine=test_engine)
 
     # Should not contain excluded columns (based on settings configuration)
     # For example, file_url should be excluded per integration spec
@@ -111,14 +111,14 @@ def test_select_star_column_exclusions():
 
     # Should contain non-excluded columns
     assert "documents_id" in final_sql
-    assert "documents_name" in final_sql
+    assert "documents_filename" in final_sql
 
     assert isinstance(guard_flags, list)
     assert isinstance(metadata, dict)
 
 
 @pytest.mark.integration
-def test_select_explicit_columns_not_expanded():
+def test_select_explicit_columns_not_expanded(test_engine):
     """Test that explicit column selection is not modified."""
     sql = """
     SELECT d.id, d.name, c.name as client_name
@@ -130,7 +130,7 @@ def test_select_explicit_columns_not_expanded():
     """
     business_id = 1
 
-    final_sql, guard_flags, metadata = guard_and_rewrite_sql(sql, business_id)
+    final_sql, guard_flags, metadata = guard_and_rewrite_sql(sql, business_id, engine=test_engine)
 
     # Should keep explicit columns unchanged
     assert "d.id" in final_sql
@@ -146,14 +146,14 @@ def test_select_explicit_columns_not_expanded():
 
 
 @pytest.mark.integration
-def test_select_star_disabled_setting():
+def test_select_star_disabled_setting(test_engine):
     """Test that SELECT * expansion can be disabled via settings."""
     # This test would require mocking settings to disable expansion
     # For now, we assume expansion is enabled by default
     sql = "SELECT * FROM public.documents WHERE business_id = :business_id AND documents.business_id = :business_id"
     business_id = 1
 
-    final_sql, guard_flags, metadata = guard_and_rewrite_sql(sql, business_id)
+    final_sql, guard_flags, metadata = guard_and_rewrite_sql(sql, business_id, engine=test_engine)
 
     # With default settings, expansion should occur
     assert "SELECT *" not in final_sql
@@ -164,7 +164,7 @@ def test_select_star_disabled_setting():
 
 
 @pytest.mark.integration
-def test_select_star_preserves_order_by():
+def test_select_star_preserves_order_by(test_engine):
     """Test that ORDER BY clauses are preserved after expansion."""
     sql = """
     SELECT * FROM public.documents
@@ -173,7 +173,7 @@ def test_select_star_preserves_order_by():
     """
     business_id = 1
 
-    final_sql, guard_flags, metadata = guard_and_rewrite_sql(sql, business_id)
+    final_sql, guard_flags, metadata = guard_and_rewrite_sql(sql, business_id, engine=test_engine)
 
     # Should expand * but preserve ORDER BY
     assert "SELECT *" not in final_sql
@@ -182,14 +182,14 @@ def test_select_star_preserves_order_by():
 
     # Should contain expanded columns
     assert "documents_id" in final_sql
-    assert "documents_name" in final_sql
+    assert "documents_filename" in final_sql
 
     assert isinstance(guard_flags, list)
     assert isinstance(metadata, dict)
 
 
 @pytest.mark.integration
-def test_select_star_three_table_join():
+def test_select_star_three_table_join(test_engine):
     """Test SELECT * expansion with three-way JOIN."""
     sql = """
     SELECT *
@@ -203,7 +203,7 @@ def test_select_star_three_table_join():
     """
     business_id = 1
 
-    final_sql, guard_flags, metadata = guard_and_rewrite_sql(sql, business_id)
+    final_sql, guard_flags, metadata = guard_and_rewrite_sql(sql, business_id, engine=test_engine)
 
     # Should expand * to columns from all three tables
     assert "SELECT *" not in final_sql
@@ -211,7 +211,7 @@ def test_select_star_three_table_join():
     # Should contain columns from all tables with proper aliases
     # Documents table (alias 'd')
     assert "d_id" in final_sql
-    assert "d_name" in final_sql
+    assert "d_filename" in final_sql
 
     # Clients table (alias 'c')
     assert "c_id" in final_sql

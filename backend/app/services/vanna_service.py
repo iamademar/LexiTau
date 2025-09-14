@@ -1,7 +1,10 @@
 """Vanna AI service for SQL generation and execution."""
 import time
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional, Union
 import re
+from decimal import Decimal
+from datetime import datetime, date
+from uuid import UUID
 from vanna.remote import VannaDefault
 from sqlalchemy import Engine, text
 import sqlglot
@@ -260,7 +263,7 @@ def _has_star_expression(statement: sqlglot.expressions.Select) -> bool:
     return False
 
 
-def _get_table_columns_from_db(engine: Engine, schema: str, table: str, settings) -> List[Tuple[str, str]]:
+def _get_table_columns_from_db(engine: Engine, schema: str, table: str, settings) -> Tuple[List[Tuple[str, str]], Dict[str, List[str]]]:
     """
     Get column names and types for a specific table from the database.
 
@@ -271,7 +274,9 @@ def _get_table_columns_from_db(engine: Engine, schema: str, table: str, settings
         settings: Application settings for exclusions
 
     Returns:
-        List of (column_name, column_type) tuples
+        Tuple of (filtered_columns, exclusions_info)
+        - filtered_columns: List of (column_name, column_type) tuples after exclusions
+        - exclusions_info: Dict with excluded columns categorized by exclusion reason
     """
     query = """
     SELECT column_name, data_type
@@ -284,33 +289,41 @@ def _get_table_columns_from_db(engine: Engine, schema: str, table: str, settings
         result = conn.execute(text(query), {"schema": schema, "table": table})
         columns = [(row[0], row[1]) for row in result.fetchall()]
 
-    # Apply exclusions
+    # Apply exclusions and track them
     filtered_columns = []
+    exclusions_info = {
+        "excluded_by_type": [],
+        "excluded_by_name_pattern": [],
+        "excluded_by_explicit": []
+    }
     fq_table = f"{schema}.{table}"
 
     for col_name, col_type in columns:
         # Skip excluded types (e.g., bytea)
         if col_type.lower() in [t.lower() for t in settings.vanna_expand_exclude_types]:
+            exclusions_info["excluded_by_type"].append(col_name)
             continue
 
         # Skip columns matching sensitive name patterns
-        should_skip = False
+        excluded_by_pattern = False
         for pattern in settings.vanna_expand_exclude_name_patterns:
             if re.search(pattern, col_name, re.IGNORECASE):
-                should_skip = True
+                exclusions_info["excluded_by_name_pattern"].append(col_name)
+                excluded_by_pattern = True
                 break
 
-        if should_skip:
+        if excluded_by_pattern:
             continue
 
         # Skip per-table excluded columns
         fq_column = f"{fq_table}.{col_name}"
         if fq_column in settings.vanna_expand_exclude_columns:
+            exclusions_info["excluded_by_explicit"].append(col_name)
             continue
 
         filtered_columns.append((col_name, col_type))
 
-    return filtered_columns
+    return filtered_columns, exclusions_info
 
 
 def _make_column_alias(table_alias: str, column_name: str) -> str:
@@ -336,7 +349,7 @@ def _make_column_alias(table_alias: str, column_name: str) -> str:
     return alias
 
 
-def _expand_star_expression(statement: sqlglot.expressions.Select, engine: Engine, settings) -> sqlglot.expressions.Select:
+def _expand_star_expression(statement: sqlglot.expressions.Select, engine: Engine, settings) -> Tuple[sqlglot.expressions.Select, Dict[str, Any]]:
     """
     Expand SELECT * expressions into explicit column lists with aliases.
 
@@ -346,23 +359,40 @@ def _expand_star_expression(statement: sqlglot.expressions.Select, engine: Engin
         settings: Application settings
 
     Returns:
-        Modified SELECT statement with expanded columns
+        Tuple of (modified_statement, star_info)
+        - modified_statement: SELECT statement with expanded columns
+        - star_info: Dict containing expansion metadata and exclusions
     """
     if not settings.vanna_expand_select_star or not _has_star_expression(statement):
-        return statement
+        return statement, {"star_expanded": False, "excluded": {}}
 
     # Get table aliases in FROM/JOIN order
     table_aliases = _extract_table_aliases(statement)
 
-    # Build new expression list
+    # Build new expression list and track exclusions
     new_expressions = []
+    star_info = {
+        "star_expanded": False,
+        "excluded": {}
+    }
 
     for expression in statement.expressions:
         if isinstance(expression, sqlglot.expressions.Star):
             # Expand * for all tables in order
+            expanded_any_columns = False
             for alias, (schema, table) in table_aliases.items():
                 try:
-                    columns = _get_table_columns_from_db(engine, schema, table, settings)
+                    columns, exclusions_info = _get_table_columns_from_db(engine, schema, table, settings)
+
+                    # Store exclusions for this table if any were found
+                    table_key = f"{schema}.{table}"
+                    if any(exclusions_info.values()):  # If any exclusions exist
+                        star_info["excluded"][table_key] = exclusions_info
+
+                    if not columns:
+                        # No columns found, likely table doesn't exist or no access
+                        continue
+
                     for col_name, col_type in columns:
                         # Create qualified column reference
                         column_ref = sqlglot.expressions.Column(
@@ -378,33 +408,28 @@ def _expand_star_expression(statement: sqlglot.expressions.Select, engine: Engin
                         )
 
                         new_expressions.append(aliased_column)
+                        expanded_any_columns = True
 
                 except Exception as e:
-                    # If column expansion fails, keep original * expression
-                    # This could happen if table doesn't exist or no permissions
-                    new_expressions.append(expression)
-                    break
+                    # If column expansion fails for this table, continue to next table
+                    continue
+
+            # If no columns were expanded for any table, keep the original * expression
+            if not expanded_any_columns:
+                new_expressions.append(expression)
+            else:
+                star_info["star_expanded"] = True
         else:
             # Keep non-star expressions as-is
             new_expressions.append(expression)
 
     # Create new SELECT statement with expanded expressions
-    # Build a new SELECT with the same structure but different expressions
-    new_select = sqlglot.expressions.Select(
-        expressions=new_expressions,
-        from_=statement.args.get('from'),
-        joins=statement.args.get('joins'),
-        where=statement.args.get('where'),
-        group=statement.args.get('group'),
-        having=statement.args.get('having'),
-        order=statement.args.get('order'),
-        limit=statement.args.get('limit'),
-        offset=statement.args.get('offset'),
-        with_=statement.args.get('with'),
-        distinct=statement.args.get('distinct')
-    )
+    # Copy all original arguments and update only the expressions
+    new_args = statement.args.copy()
+    new_args['expressions'] = new_expressions
+    new_select = sqlglot.expressions.Select(**new_args)
 
-    return new_select
+    return new_select, star_info
 
 
 def _validate_function_denylist(statement: sqlglot.expressions.Select, settings) -> None:
@@ -439,13 +464,189 @@ def _validate_function_denylist(statement: sqlglot.expressions.Select, settings)
                 raise GuardError(f"function_denied:{func_name}")
 
 
-def guard_and_rewrite_sql(sql: str, business_id: int) -> Tuple[str, List[str], Dict[str, Any]]:
+def _inject_smart_order_by(statement: sqlglot.expressions.Select, engine: Engine, settings) -> Tuple[sqlglot.expressions.Select, Dict[str, Any]]:
+    """
+    Inject smart ORDER BY clause when missing based on query structure.
+
+    Rules:
+    1) If ORDER BY already present → do nothing
+    2) If GROUP BY present → ORDER BY first group expression ASC
+    3) Else if DISTINCT → ORDER BY 1 ASC
+    4) Else pick first tenant-bearing table alias, attempt in order:
+       created_at DESC, issued_on DESC, updated_at DESC, date DESC, id ASC
+       If none exist → ORDER BY 1 ASC
+
+    Args:
+        statement: Parsed SELECT statement
+        engine: SQLAlchemy engine for database queries
+        settings: Application settings
+
+    Returns:
+        Tuple of (modified_statement, order_info)
+    """
+    order_info = {
+        "order_injected": False,
+        "order_strategy": None,
+        "order_expression": None
+    }
+
+    # Rule 1: If ORDER BY already present, do nothing
+    if statement.args.get("order"):
+        order_info["order_strategy"] = "existing"
+        return statement, order_info
+
+    # Rule 2: If GROUP BY present, ORDER BY first group expression ASC
+    group_by = statement.args.get("group")
+    if group_by and group_by.expressions:
+        first_group_expr = group_by.expressions[0]
+        order_by = sqlglot.expressions.Order(expressions=[
+            sqlglot.expressions.Ordered(this=first_group_expr, desc=False)
+        ])
+        statement = statement.copy()
+        statement.args["order"] = order_by
+        order_info["order_injected"] = True
+        order_info["order_strategy"] = "group_by_first"
+        order_info["order_expression"] = first_group_expr.sql(dialect='postgres')
+        return statement, order_info
+
+    # Rule 3: If DISTINCT, ORDER BY 1 ASC
+    if statement.args.get("distinct"):
+        order_by = sqlglot.expressions.Order(expressions=[
+            sqlglot.expressions.Ordered(
+                this=sqlglot.expressions.Literal.number("1"),
+                desc=False
+            )
+        ])
+        statement = statement.copy()
+        statement.args["order"] = order_by
+        order_info["order_injected"] = True
+        order_info["order_strategy"] = "distinct_first_column"
+        order_info["order_expression"] = "1 ASC"
+        return statement, order_info
+
+    # Rule 4: Pick first tenant-bearing table and try standard columns
+    referenced_tables = _extract_referenced_tables(statement)
+    table_aliases = _extract_table_aliases(statement)
+
+    # Find first tenant-bearing table
+    tenant_table = None
+    tenant_alias = None
+
+    for alias, (schema, table) in table_aliases.items():
+        fq_table = f"{schema}.{table}"
+        if fq_table in settings.vanna_tenant_required_tables:
+            tenant_table = (schema, table)
+            tenant_alias = alias
+            break
+
+    # If no tenant table found, fall back to first referenced table
+    if not tenant_table and referenced_tables:
+        tenant_table = referenced_tables[0]
+        # Try to find alias for this table
+        for alias, (schema, table) in table_aliases.items():
+            if (schema, table) == tenant_table:
+                tenant_alias = alias
+                break
+        # If no alias, use table name
+        if not tenant_alias:
+            tenant_alias = tenant_table[1]
+
+    if tenant_table:
+        # Try columns in order: created_at, issued_on, updated_at, date (DESC), then id (ASC)
+        candidate_columns = [
+            ("created_at", True),  # DESC
+            ("issued_on", True),   # DESC
+            ("updated_at", True),  # DESC
+            ("date", True),        # DESC
+            ("id", False)          # ASC
+        ]
+
+        # Get actual columns for this table
+        try:
+            schema, table = tenant_table
+            columns_info, _ = _get_table_columns_from_db(engine, schema, table, settings)
+            available_columns = {col_name for col_name, _ in columns_info}
+
+            for col_name, is_desc in candidate_columns:
+                if col_name in available_columns:
+                    # Found a suitable column
+                    order_expr = f"{tenant_alias}.{col_name}"
+                    order_by = sqlglot.expressions.Order(expressions=[
+                        sqlglot.expressions.Ordered(
+                            this=sqlglot.expressions.Column(
+                                this=col_name,
+                                table=tenant_alias
+                            ),
+                            desc=is_desc
+                        )
+                    ])
+                    statement = statement.copy()
+                    statement.args["order"] = order_by
+                    order_info["order_injected"] = True
+                    order_info["order_strategy"] = "tenant_table_heuristic"
+                    order_info["order_expression"] = f"{order_expr} {'DESC' if is_desc else 'ASC'}"
+                    return statement, order_info
+        except Exception:
+            # If column lookup fails, fall through to default
+            pass
+
+    # Fallback: ORDER BY 1 ASC
+    order_by = sqlglot.expressions.Order(expressions=[
+        sqlglot.expressions.Ordered(
+            this=sqlglot.expressions.Literal.number("1"),
+            desc=False
+        )
+    ])
+    statement = statement.copy()
+    statement.args["order"] = order_by
+    order_info["order_injected"] = True
+    order_info["order_strategy"] = "fallback_first_column"
+    order_info["order_expression"] = "1 ASC"
+    return statement, order_info
+
+
+def _inject_limit_clause(statement: sqlglot.expressions.Select, settings) -> Tuple[sqlglot.expressions.Select, Dict[str, Any]]:
+    """
+    Inject LIMIT clause if missing for truncation detection.
+
+    Args:
+        statement: Parsed SELECT statement
+        settings: Application settings with row limit
+
+    Returns:
+        Tuple of (modified_statement, limit_info)
+    """
+    limit_info = {
+        "limit_injected": False,
+        "limit_value": None
+    }
+
+    # If LIMIT already present, do nothing
+    if statement.args.get("limit"):
+        limit_info["limit_value"] = "existing"
+        return statement, limit_info
+
+    # Inject LIMIT row_limit + 1 for truncation detection
+    row_limit = settings.vanna_default_row_limit
+    limit_value = row_limit + 1
+
+    limit_clause = sqlglot.expressions.Limit(expression=sqlglot.expressions.Literal.number(str(limit_value)))
+    statement = statement.copy()
+    statement.args["limit"] = limit_clause
+
+    limit_info["limit_injected"] = True
+    limit_info["limit_value"] = limit_value
+    return statement, limit_info
+
+
+def guard_and_rewrite_sql(sql: str, business_id: int, engine: Optional[Engine] = None) -> Tuple[str, List[str], Dict[str, Any]]:
     """
     Guard and rewrite SQL according to Vanna policy.
 
     Args:
         sql: Input SQL statement
         business_id: Tenant business ID for scoping
+        engine: Optional database engine to use (defaults to main engine)
 
     Returns:
         Tuple of (final_sql, guard_flags, metadata)
@@ -481,15 +682,35 @@ def guard_and_rewrite_sql(sql: str, business_id: int) -> Tuple[str, List[str], D
         # Validate tenant enforcement (global and per-alias)
         _validate_tenant_enforcement(sql, statement, settings)
 
+        # Use provided engine or default to main engine
+        db_engine = engine or ENGINE
+
         # Expand SELECT * expressions if enabled
-        expanded_statement = _expand_star_expression(statement, ENGINE, settings)
+        expanded_statement, star_info = _expand_star_expression(statement, db_engine, settings)
+
+        # Inject smart ORDER BY if missing
+        ordered_statement, order_info = _inject_smart_order_by(expanded_statement, db_engine, settings)
+
+        # Inject LIMIT clause for truncation detection if missing
+        limited_statement, limit_info = _inject_limit_clause(ordered_statement, settings)
 
         # Convert back to SQL string
-        final_sql = expanded_statement.sql(dialect='postgres')
+        final_sql = limited_statement.sql(dialect='postgres')
 
-        # For now, return expanded SQL with empty flags/metadata
+        # Build guard flags and metadata
         guard_flags = []
-        metadata = {}
+        if star_info["star_expanded"]:
+            guard_flags.append("star_expanded")
+        if order_info["order_injected"]:
+            guard_flags.append("order_injected")
+        if limit_info["limit_injected"]:
+            guard_flags.append("limit_injected")
+
+        metadata = {
+            "star": star_info,
+            "order": order_info,
+            "limit": limit_info
+        }
 
         return final_sql, guard_flags, metadata
 
@@ -503,6 +724,7 @@ def guarded_run_sql(
     params: Dict[str, Any],
     timeout_s: int = 5,
     work_mem: Optional[str] = None,
+    row_limit: Optional[int] = None,
 ) -> Tuple[List[str], List[List[Any]], int, bool, int, Optional[str]]:
     """
     Execute SQL with safety GUCs, timeouts, and read-only constraints.
@@ -534,7 +756,14 @@ def guarded_run_sql(
         rows = [list(row) for row in rows_as_dicts]
 
         row_count = len(rows)
-        truncated = False  # Will implement truncation detection later
+        truncated = False
+
+        # Detect truncation if row_limit was provided (from LIMIT injection)
+        if row_limit is not None and row_count > row_limit:
+            # Trim to the actual limit and mark as truncated
+            rows = rows[:row_limit]
+            row_count = row_limit
+            truncated = True
 
         # Calculate execution time
         execution_ms = int((time.time() - start_time) * 1000)
@@ -569,6 +798,141 @@ def get_vanna() -> VannaDefault:
 
     vn.run_sql = _vn_run_sql
     return vn
+
+
+def serialize_cell(value: Any) -> Any:
+    """
+    JSON-safe serialization for database cell values.
+
+    Converts:
+    - Decimal → string
+    - int → string if abs > 2**53-1 (JavaScript MAX_SAFE_INTEGER)
+    - datetime → UTC ISO-8601 'Z' format
+    - date → YYYY-MM-DD
+    - UUID → str
+    - list/tuple → list
+    - dict → pass-through
+    - None → None
+    """
+    if value is None:
+        return None
+    elif isinstance(value, Decimal):
+        return str(value)
+    elif isinstance(value, int):
+        # Convert to string if beyond JavaScript MAX_SAFE_INTEGER
+        if abs(value) > 2**53 - 1:
+            return str(value)
+        return value
+    elif isinstance(value, datetime):
+        # Convert to UTC ISO-8601 with 'Z' suffix
+        return value.isoformat() + 'Z'
+    elif isinstance(value, date):
+        # Convert to YYYY-MM-DD format
+        return value.isoformat()
+    elif isinstance(value, UUID):
+        return str(value)
+    elif isinstance(value, (list, tuple)):
+        return list(value)
+    elif isinstance(value, dict):
+        return value  # Pass-through
+    else:
+        return value
+
+
+def build_columns_meta(
+    engine: Engine,
+    columns: List[str],
+    rows: List[List[Any]],
+    description: Optional[Any] = None
+) -> List[Dict[str, Any]]:
+    """
+    Build metadata for columns including data types and serialization info.
+
+    Returns list of dicts with:
+    - name: column name
+    - db_type: PostgreSQL type (via OID lookup, best-effort)
+    - py_type: Python type name from first non-null value
+    - nullable: True if any null found in page
+    - serialized_as: type label after serialize_cell transformation
+    """
+    meta = []
+
+    # Create OID to type name mapping for PostgreSQL types
+    pg_type_map = {}
+    try:
+        # Try to get PostgreSQL type information if available
+        if hasattr(description, 'description') and description.description:
+            # SQLAlchemy result description format
+            with engine.begin() as conn:
+                type_query = text("""
+                    SELECT oid, typname
+                    FROM pg_type
+                    WHERE oid = ANY(:oids)
+                """)
+                oids = [col[1] for col in description.description if len(col) > 1]
+                if oids:
+                    result = conn.execute(type_query, {'oids': oids})
+                    pg_type_map = {row[0]: row[1] for row in result.fetchall()}
+    except Exception:
+        # Best-effort, ignore failures in type lookup
+        pass
+
+    for col_idx, column_name in enumerate(columns):
+        # Get PostgreSQL type via OID lookup (best-effort)
+        db_type = "unknown"
+        if (hasattr(description, 'description') and
+            description.description and
+            len(description.description) > col_idx and
+            len(description.description[col_idx]) > 1):
+            type_oid = description.description[col_idx][1]
+            db_type = pg_type_map.get(type_oid, "unknown")
+
+        # Find first non-null value for Python type detection
+        py_type = "NoneType"
+        nullable = False
+
+        for row in rows:
+            if len(row) > col_idx:
+                value = row[col_idx]
+                if value is None:
+                    nullable = True
+                elif py_type == "NoneType":  # First non-null value found
+                    py_type = type(value).__name__
+            else:
+                # Row doesn't have enough values for this column index
+                nullable = True
+
+        # Determine serialized_as based on serialize_cell behavior
+        serialized_as = py_type
+        if py_type == "Decimal":
+            serialized_as = "str"
+        elif py_type == "int":
+            # Check if any values exceed JavaScript MAX_SAFE_INTEGER
+            for row in rows:
+                if (len(row) > col_idx and
+                    row[col_idx] is not None and
+                    isinstance(row[col_idx], int) and
+                    abs(row[col_idx]) > 2**53 - 1):
+                    serialized_as = "str"
+                    break
+        elif py_type == "datetime":
+            serialized_as = "str"
+        elif py_type == "date":
+            serialized_as = "str"
+        elif py_type == "UUID":
+            serialized_as = "str"
+        elif py_type in ("list", "tuple"):
+            serialized_as = "list"
+
+        meta.append({
+            "name": column_name,
+            "db_type": db_type,
+            "py_type": py_type,
+            "nullable": nullable,
+            "serialized_as": serialized_as
+        })
+
+    return meta
 
 
 # Global Vanna instance
