@@ -7,7 +7,9 @@ import sys
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from app.models import Base
+from app.db import Base
+# Import all models so they are registered with Base.metadata
+from app.models import User, Business, Document, ExtractedField, LineItem, FieldCorrection, Client, Project, Category
 
 config = context.config
 

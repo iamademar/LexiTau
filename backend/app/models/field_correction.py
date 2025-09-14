@@ -16,6 +16,7 @@ class FieldCorrection(Base):
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False, index=True)
+    business_id = Column(Integer, ForeignKey("businesses.id"), nullable=False, index=True)
     field_name = Column(String, nullable=False, index=True)  # Same as ExtractedField.field_name
     original_value = Column(Text, nullable=True)  # Original extracted value
     corrected_value = Column(Text, nullable=False)  # User-corrected value
