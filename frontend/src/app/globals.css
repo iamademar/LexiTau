@@ -4,6 +4,25 @@
   --color-bg: oklch(99% 0.01 250);
   --color-fg: oklch(20% 0.03 260);
   --radius: 16px;
+  
+  /* Component colors */
+  --color-primary: oklch(47% 0.15 258);
+  --color-primary-foreground: oklch(99% 0.01 250);
+  --color-secondary: oklch(96% 0.01 250);
+  --color-secondary-foreground: oklch(20% 0.03 260);
+  --color-muted: oklch(96% 0.01 250);
+  --color-muted-foreground: oklch(45% 0.03 260);
+  --color-accent: oklch(96% 0.01 250);
+  --color-accent-foreground: oklch(20% 0.03 260);
+  --color-destructive: oklch(55% 0.18 25);
+  --color-destructive-foreground: oklch(99% 0.01 250);
+  --color-border: oklch(91% 0.01 250);
+  --color-input: oklch(91% 0.01 250);
+  --color-ring: oklch(47% 0.15 258);
+  --color-card: oklch(99% 0.01 250);
+  --color-card-foreground: oklch(20% 0.03 260);
+  --color-background: oklch(99% 0.01 250);
+  --color-foreground: oklch(20% 0.03 260);
 }
 
 :root {
