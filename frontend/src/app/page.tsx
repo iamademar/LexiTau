@@ -1,6 +1,22 @@
+'use client'
+
+import dynamic from 'next/dynamic'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+
+// Dynamically import Assistant with SSR disabled
+const Assistant = dynamic(() => import('@/components/assistant/Assistant').then(mod => ({ default: mod.Assistant })), {
+  ssr: false,
+  loading: () => (
+    <div className="flex items-center justify-center h-[400px]">
+      <div className="text-center space-y-2">
+        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto"></div>
+        <p className="text-sm text-muted-foreground">Loading Assistant...</p>
+      </div>
+    </div>
+  )
+})
 
 export default function Home() {
   return (
@@ -13,30 +29,8 @@ export default function Home() {
         
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           {/* Assistant Card */}
-          <div className="bg-card rounded-lg border p-6 shadow-sm">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-2xl font-semibold">Assistant</h2>
-              <div className="text-sm text-muted-foreground">Coming soon</div>
-            </div>
-            <div className="space-y-4">
-              <p className="text-muted-foreground">
-                Chat with our AI assistant to analyze documents, ask questions, and get intelligent responses.
-              </p>
-              <div className="bg-muted/50 rounded-md p-4 min-h-[200px] flex items-center justify-center">
-                <div className="text-center space-y-2">
-                  <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mx-auto">
-                    <svg className="w-6 h-6 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-4l-4 4z" />
-                    </svg>
-                  </div>
-                  <p className="text-sm text-muted-foreground">Assistant interface will appear here</p>
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <Button variant="default" disabled>Start Chat</Button>
-                <Button variant="outline" disabled>Upload Document</Button>
-              </div>
-            </div>
+          <div className="bg-card rounded-lg border shadow-sm h-[600px]">
+            <Assistant />
           </div>
 
           {/* Sample Form Card */}
