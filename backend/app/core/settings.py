@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     azure_document_intelligence_region: str
     azure_document_intelligence_endpoint: str
     
+    # OpenAI settings
+    openai_api_key: Optional[str] = None
+    openai_embedding_model: str = "text-embedding-3-small"
+
     # Application settings
     debug: bool = False
     environment: str = "development"

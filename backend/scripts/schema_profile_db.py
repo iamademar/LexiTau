@@ -24,6 +24,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from sqlalchemy.orm import sessionmaker
 from app.models.column_profile import ColumnProfile as ColumnProfileModel
 from app.schemas.column_profile import ColumnProfileCreate
+from app.services.embedding_service import embedding_service
 
 
 # ------------------ CONFIG (tweak as needed) ------------------
@@ -428,7 +429,7 @@ def save_profile_to_db(session, profile_data: ColumnProfileCreate) -> None:
     session.commit()
 
 
-def profile_database(engine: Engine, only_tables: Optional[Sequence[str]] = None, schema: Optional[str] = None,
+async def profile_database(engine: Engine, only_tables: Optional[Sequence[str]] = None, schema: Optional[str] = None,
                      out_path: Optional[str] = None, db_session=None, database_name: str = None) -> List[ColumnProfile]:
     md = MetaData(schema=schema) if schema else MetaData()
     profiles: List[ColumnProfile] = []
@@ -475,6 +476,7 @@ def profile_database(engine: Engine, only_tables: Optional[Sequence[str]] = None
                 # Generate LLM summary
                 other_cols = [c for c in other_columns if c != col.name]
                 short_summary = generate_short_summary(english_desc, col.name, t.name, other_cols)
+                embedding = await embedding_service.generate_embedding(short_summary)
                 
                 # Combine both descriptions
                 long_summary = f"{short_summary} {english_desc}"
@@ -489,6 +491,7 @@ def profile_database(engine: Engine, only_tables: Optional[Sequence[str]] = None
                         profile_schema = convert_to_pydantic_schema(
                             cp, english_desc, short_summary, long_summary, database_name
                         )
+                        profile_schema.vector_embedding = embedding
                         save_profile_to_db(db_session, profile_schema)
                         dbg(f"Saved profile for {t.name}.{col.name} to database")
                     except Exception as db_error:
@@ -502,7 +505,7 @@ def profile_database(engine: Engine, only_tables: Optional[Sequence[str]] = None
     return profiles
 
 # --------- main ----------
-def main() -> None:
+async def main() -> None:
     global DEBUG
     args = parse_args()
     DEBUG = bool(args.debug)
@@ -529,7 +532,7 @@ def main() -> None:
     random.seed(RANDOM_SEED)
     
     try:
-        profile_database(
+        await profile_database(
             engine, 
             only_tables=only_tables, 
             schema=args.schema, 
@@ -542,5 +545,6 @@ def main() -> None:
             db_session.close()
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
 
