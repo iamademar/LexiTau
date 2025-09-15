@@ -14,55 +14,13 @@ from app.services.embedding_service import embedding_service
 from app.services.value_index_service import ValueLSHIndex
 from app.services.schema_linking_orchestrator_service import run_sql_first_linking, LLMClient
 from app.services.extractor_fields_and_literals_service import extract_fields_and_literals
+from app.services.openai_llm_service import OpenAILLMService
 
 # Setup database connection
 settings = get_settings()
 engine = create_engine(settings.database_url.replace('+asyncpg', ''))
 SessionLocal = sessionmaker(bind=engine)
 
-class OpenAILLMClient:
-    """Wrapper to make OpenAI client conform to LLMClient protocol"""
-    def __init__(self, client: AsyncOpenAI, model: str = "gpt-4o-mini", temperature: float = 0.0):
-        self.client = client
-        self.model = model
-        self.temperature = temperature
-
-    async def chat(self, messages: List[Dict[str, str]]) -> str:
-        """Convert messages to OpenAI format and get response"""
-        try:
-            # Convert to OpenAI format if needed
-            openai_messages = []
-            for msg in messages:
-                openai_messages.append({
-                    "role": msg["role"],
-                    "content": msg["content"]
-                })
-
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=openai_messages,
-                temperature=self.temperature,
-                max_tokens=800
-            )
-
-            content = response.choices[0].message.content
-            if not content:
-                return ""
-
-            # Clean up SQL if wrapped in markdown
-            content = content.strip()
-            if content.startswith("```sql"):
-                content = content[6:]
-            elif content.startswith("```"):
-                content = content[3:]
-            if content.endswith("```"):
-                content = content[:-3]
-
-            return content.strip()
-
-        except Exception as e:
-            print(f"LLM Error: {e}")
-            return f"-- Error: {e}"
 
 async def test_orchestrator():
     """Test the schema linking orchestrator service manually"""
@@ -104,7 +62,7 @@ async def test_orchestrator():
         # Initialize LLM client
         print("3. Initializing LLM Client...")
         openai_client = AsyncOpenAI()
-        llm = OpenAILLMClient(openai_client, model="gpt-4o-mini", temperature=0.0)
+        llm = OpenAILLMService(openai_client, model="gpt-4o-mini", temperature=0.0)
         print("   LLM client ready")
         print()
 

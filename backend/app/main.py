@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routers import auth, documents, tags
+from .routers import auth, documents, tags, analysis
 
 app = FastAPI(
     title="LexiTau API",
@@ -20,6 +20,21 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(documents.router)
 app.include_router(tags.router)
+app.include_router(analysis.router)
+
+# Warm the value index at startup
+from .db import get_db
+from .routers.analysis import get_value_index
+
+@app.on_event("startup")
+def warm_indexes():
+    # open a short-lived session and build LSH index once
+    try:
+        db = next(get_db())
+        get_value_index(db)
+    except Exception:
+        # don't crash app on warm failure; it will build on first request
+        pass
 
 @app.get("/health")
 async def health_check():
