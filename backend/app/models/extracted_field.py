@@ -15,6 +15,7 @@ class ExtractedField(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False, index=True)
+    business_id = Column(Integer, ForeignKey("businesses.id"), nullable=False, index=True)
     field_name = Column(String, nullable=False, index=True)  # e.g., "invoice_date", "vendor_name", "total_amount"
     value = Column(Text, nullable=True)  # The extracted value as text
     confidence = Column(Float, nullable=True)  # Confidence score (0.0 to 1.0)

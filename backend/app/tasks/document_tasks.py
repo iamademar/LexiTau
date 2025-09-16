@@ -204,6 +204,7 @@ def _save_extracted_fields(db: Session, document: Document, fields: List[Dict[st
             # Create ExtractedField instance
             extracted_field = ExtractedField(
                 document_id=document.id,
+                business_id=document.business_id,
                 field_name=field_data["field_name"],
                 value=field_data["value"],
                 confidence=field_data["confidence"]
@@ -243,6 +244,7 @@ def _save_line_items(db: Session, document: Document, line_items: List[Dict[str,
             # Create LineItem instance
             line_item = LineItem(
                 document_id=document.id,
+                business_id=document.business_id,
                 description=item_data.get("description"),
                 quantity=item_data.get("quantity"),
                 unit_price=item_data.get("unit_price"),

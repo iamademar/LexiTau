@@ -102,6 +102,7 @@ def completed_document_with_line_item(test_user_and_token, db_session):
     
     line_item = LineItem(
         document_id=document.id,
+        business_id=user.business_id,
         description="Original Item",
         quantity=Decimal("2"),
         unit_price=Decimal("50.00"),
@@ -318,6 +319,7 @@ class TestLineItemUpdateEndpoint:
         
         line_item = LineItem(
             document_id=pending_doc.id,
+            business_id=user.business_id,
             description="Test Item",
             quantity=Decimal("1"),
             unit_price=Decimal("100"),
@@ -374,6 +376,7 @@ class TestLineItemUpdateEndpoint:
         
         other_line_item = LineItem(
             document_id=other_doc.id,
+            business_id=user.business_id,
             description="Other Item",
             quantity=Decimal("1"),
             unit_price=Decimal("200"),

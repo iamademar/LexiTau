@@ -186,8 +186,9 @@ def is_low_confidence(confidence: Optional[float]) -> bool:
 
 
 def build_field_responses_with_corrections(
-    extracted_fields: List[models.ExtractedField], 
-    document_id: UUID, 
+    extracted_fields: List[models.ExtractedField],
+    document_id: UUID,
+    business_id: int,
     db: Session
 ) -> List[ExtractedFieldResponse]:
     """
@@ -204,7 +205,8 @@ def build_field_responses_with_corrections(
     # Get the latest corrections for each field (if any)
     latest_corrections = {}
     corrections = db.query(models.FieldCorrection).filter(
-        models.FieldCorrection.document_id == document_id
+        models.FieldCorrection.document_id == document_id,
+        models.FieldCorrection.business_id == business_id
     ).order_by(models.FieldCorrection.field_name, models.FieldCorrection.timestamp.desc()).all()
     
     # Build a map of latest correction per field
@@ -325,16 +327,18 @@ async def get_document_fields(
     
     # Get extracted fields for this document
     extracted_fields = db.query(models.ExtractedField).filter(
-        models.ExtractedField.document_id == document_id
+        models.ExtractedField.document_id == document_id,
+        models.ExtractedField.business_id == current_user.business_id
     ).order_by(models.ExtractedField.field_name).all()
     
     # Get line items for this document
     line_items = db.query(models.LineItem).filter(
-        models.LineItem.document_id == document_id
+        models.LineItem.document_id == document_id,
+        models.LineItem.business_id == current_user.business_id
     ).order_by(models.LineItem.id).all()
     
     # Build field responses with corrections overlay
-    field_responses = build_field_responses_with_corrections(extracted_fields, document_id, db)
+    field_responses = build_field_responses_with_corrections(extracted_fields, document_id, current_user.business_id, db)
     
     line_item_responses = [
         LineItemResponse(
@@ -442,6 +446,7 @@ async def correct_document_fields(
             # Get existing field if it exists
             existing_field = db.query(models.ExtractedField).filter(
                 models.ExtractedField.document_id == document_id,
+                models.ExtractedField.business_id == current_user.business_id,
                 models.ExtractedField.field_name == correction_req.field_name
             ).first()
             
@@ -451,6 +456,7 @@ async def correct_document_fields(
             # Log the correction
             field_correction = models.FieldCorrection(
                 document_id=document_id,
+                business_id=current_user.business_id,
                 field_name=correction_req.field_name,
                 original_value=original_value,
                 corrected_value=correction_req.corrected_value,
@@ -467,6 +473,7 @@ async def correct_document_fields(
                 # Create new field for correction
                 new_field = models.ExtractedField(
                     document_id=document_id,
+                    business_id=current_user.business_id,
                     field_name=correction_req.field_name,
                     value=correction_req.corrected_value,
                     confidence=None  # User-corrected fields have no confidence score
@@ -516,11 +523,12 @@ async def correct_document_fields(
     
     # Get updated fields after corrections
     updated_fields = db.query(models.ExtractedField).filter(
-        models.ExtractedField.document_id == document_id
+        models.ExtractedField.document_id == document_id,
+        models.ExtractedField.business_id == current_user.business_id
     ).order_by(models.ExtractedField.field_name).all()
-    
+
     # Build field responses with corrections overlay
-    field_responses = build_field_responses_with_corrections(updated_fields, document_id, db)
+    field_responses = build_field_responses_with_corrections(updated_fields, document_id, current_user.business_id, db)
     
     logger.info(f"Field corrections completed for document {document_id}: {corrections_applied} applied, {corrections_failed} failed")
     
@@ -582,7 +590,8 @@ async def update_line_item(
     # Get the line item and verify it belongs to this document
     line_item = db.query(models.LineItem).filter(
         models.LineItem.id == item_id,
-        models.LineItem.document_id == document_id
+        models.LineItem.document_id == document_id,
+        models.LineItem.business_id == current_user.business_id
     ).first()
     
     if not line_item:

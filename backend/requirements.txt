@@ -21,3 +21,5 @@ pytest-xdist==3.8.0
 langchain==0.3.27
 langchain-openai==0.3.32
 pgvector==0.4.1
+datasketch==1.6.5
+sqlglot==27.4.0
