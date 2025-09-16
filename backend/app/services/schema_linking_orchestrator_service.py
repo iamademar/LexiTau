@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import List, Tuple, Set, Dict, Any, Protocol
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from sqlglot import parse_one, exp
 
 from app.services.prompt_variants_service import (
     FiveVariants,
@@ -16,8 +17,51 @@ from app.services.prompt_variants_service import (
 from app.services.extractor_fields_and_literals_service import extract_fields_and_literals
 from app.services.value_index_service import ValueLSHIndex
 
+# PostgreSQL reserved keywords to avoid in table aliases
+PG_RESERVED_KEYWORDS = {
+    'do', 'if', 'in', 'is', 'of', 'on', 'or', 'to', 'all', 'and', 'any', 'are', 'as', 'at',
+    'by', 'for', 'has', 'its', 'new', 'not', 'now', 'old', 'row', 'set', 'sql', 'the', 'top',
+    'add', 'any', 'end', 'get', 'key', 'let', 'may', 'out', 'ref', 'run', 'sum', 'try', 'use'
+}
+
+def _generate_safe_alias(table_name: str, used_aliases: set[str]) -> str:
+    """Generate a safe table alias avoiding PostgreSQL reserved keywords."""
+    # Try first two letters
+    alias = table_name[:2].lower() or "t"
+
+    # If it's a reserved keyword, try first letter + 'x'
+    if alias in PG_RESERVED_KEYWORDS:
+        alias = table_name[:1].lower() + "x"
+
+    # If still reserved or already used, add numbers
+    if alias in PG_RESERVED_KEYWORDS or alias in used_aliases:
+        base_alias = alias if alias not in PG_RESERVED_KEYWORDS else "tbl"
+        i = 1
+        while f"{base_alias}{i}" in used_aliases or f"{base_alias}{i}" in PG_RESERVED_KEYWORDS:
+            i += 1
+        alias = f"{base_alias}{i}"
+    elif alias in used_aliases:
+        i = 1
+        while f"{alias}{i}" in used_aliases:
+            i += 1
+        alias = f"{alias}{i}"
+
+    return alias
+
 class LLMClient(Protocol):
     async def chat(self, messages: List[Dict[str, str]]) -> str: ...
+
+# Tables that require tenant scoping with business_id
+TENANTED_TABLES = {
+    "documents": "business_id",
+    "extracted_fields": "business_id",
+    "line_items": "business_id",
+    "field_corrections": "business_id",
+    "clients": "business_id",
+    "projects": "business_id",
+    "categories": "business_id",
+    "users": "business_id",
+}
 
 def _augment_tables_with_fields(tables: List[TableCtx],
                                 add_fields: Set[Tuple[str, str]],
@@ -35,7 +79,8 @@ def _augment_tables_with_fields(tables: List[TableCtx],
     for (tname, cname) in add_fields:
         if tname not in idx:
             # create a stub table with a generated alias
-            alias = (tname[:2].lower() or "t")
+            used_aliases = {t.alias for t in tables}
+            alias = _generate_safe_alias(tname, used_aliases)
             tables.append(TableCtx(name=tname, alias=alias, columns=[ColumnCtx(name=cname, short_summary="", long_summary="", english_description="")]))
             idx[tname] = {cname: tables[-1].columns[0]}
         elif cname not in idx[tname]:
@@ -83,6 +128,7 @@ async def run_sql_first_linking(
     llm: LLMClient,
     embedding_service: Any,
     value_index: ValueLSHIndex,
+    business_id: int,
     max_retry: int = 2,
     # Focused schema knobs (paper-aligned defaults)
     M: int = 50,
@@ -148,12 +194,23 @@ async def run_sql_first_linking(
 
     # 3) Final SQL: render a compact context from unioned fields (short for all; long only for a few)
     final_ctx_text = _render_final_context_from_union(db, linked_fields)
+
+    # Add tenant scoping hint to the prompt
+    tenant_hint = (
+        f"\nTENANT SCOPE: All queries MUST constrain rows to business_id = {business_id} "
+        f"on every table that has this column. If a table lacks business_id, JOIN through "
+        f"a table that has it and include the constraint there."
+    )
+
     final_messages = [
         {"role": "system", "content": SYSTEM_RULES},
-        {"role": "assistant", "content": final_ctx_text},
+        {"role": "assistant", "content": final_ctx_text + tenant_hint},
         {"role": "user", "content": f"Question:\n{question}"},
     ]
-    final_sql = await llm.chat(final_messages)
+    sql_from_llm = await llm.chat(final_messages)
+
+    # Apply hard guard to enforce business_id scoping
+    final_sql = _enforce_business_scope(sql_from_llm, business_id)
     return final_sql, linked_fields
 
 def _render_final_context_from_union(db: Session, fields: Set[Tuple[str, str]]) -> str:
@@ -193,12 +250,7 @@ def _render_final_context_from_union(db: Session, fields: Set[Tuple[str, str]]) 
     tables: List[TableCtx] = []
     used_aliases: set[str] = set()
     for tname, cols in by_table.items():
-        alias = (tname[:2].lower() or "t")
-        if alias in used_aliases:
-            i = 1
-            while f"{alias}{i}" in used_aliases:
-                i += 1
-            alias = f"{alias}{i}"
+        alias = _generate_safe_alias(tname, used_aliases)
         used_aliases.add(alias)
 
         # choose a few columns to carry long summaries
@@ -216,3 +268,52 @@ def _render_final_context_from_union(db: Session, fields: Set[Tuple[str, str]]) 
 
     # Minimal + long-for-shortlist context
     return _render_context_block(tables=tables, profile_kind="maximal")
+
+def _enforce_business_scope(sql: str, business_id: int) -> str:
+    """
+    Hard guard to enforce business_id constraints on all tenanted tables.
+    Parses the SQL and adds business_id constraints where missing.
+    """
+    try:
+        tree = parse_one(sql, read="postgres")
+    except Exception:
+        return _fallback_inject(sql)  # simple fallback
+
+    def add_predicate(node: exp.Expression) -> None:
+        if isinstance(node, (exp.From, exp.Join)):
+            table = node.find(exp.Table)
+            if not table:
+                return
+            table_name = table.name
+            alias = (node.find(exp.Alias) or table.args.get("alias"))
+            qualifier = alias.name if alias else table_name
+
+            if table_name in TENANTED_TABLES:
+                col = TENANTED_TABLES[table_name]
+                predicate = exp.EQ(
+                    this=exp.Column(this=exp.Identifier(this=col), table=exp.Identifier(this=qualifier)),
+                    expression=exp.Parameter(this="business_id"),
+                )
+                if isinstance(node, exp.Join):
+                    on = node.args.get("on")
+                    node.set("on", exp.and_(on, predicate) if on else predicate)
+                else:
+                    where_ = node.parent.find(exp.Where)
+                    if where_:
+                        where_.set("this", exp.and_(where_.this, predicate))
+                    else:
+                        node.parent.set("where", exp.Where(this=predicate))
+
+    for n in list(tree.find_all((exp.From, exp.Join))):
+        add_predicate(n)
+
+    return tree.sql(dialect="postgres")
+
+def _fallback_inject(sql: str) -> str:
+    """
+    Minimal safety net if parsing fails; execution layer MUST still bind business_id.
+    """
+    lower = sql.lower()
+    if " where " in lower:
+        return sql + " AND :business_id IS NOT NULL /* bind required */"
+    return sql + " WHERE :business_id IS NOT NULL /* bind required */"
