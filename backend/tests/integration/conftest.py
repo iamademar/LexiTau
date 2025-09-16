@@ -2,7 +2,7 @@
 import os
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from app.main import app
 from app.db import Base, get_db
@@ -16,7 +16,16 @@ engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 @pytest.fixture(scope="session", autouse=True)
-def _create_schema_once():
+def _enable_vector_extension():
+    """Enable pgvector extension before creating schema"""
+    with engine.connect() as conn:
+        # Enable vector extension if not already enabled
+        conn.execute(text('CREATE EXTENSION IF NOT EXISTS "vector"'))
+        conn.commit()
+    yield
+
+@pytest.fixture(scope="session", autouse=True)
+def _create_schema_once(_enable_vector_extension):
     Base.metadata.create_all(bind=engine)
     yield
     Base.metadata.drop_all(bind=engine)

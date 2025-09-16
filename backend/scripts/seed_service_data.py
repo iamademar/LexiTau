@@ -128,6 +128,7 @@ def add_extracted_fields(db, document: Document, is_invoice: bool, when: datetim
     for field_name, value, conf in fields:
         db.add(ExtractedField(
             document_id=document.id,
+            business_id=document.business_id,
             field_name=field_name,
             value=value,
             confidence=conf
@@ -146,6 +147,7 @@ def add_line_items(db, document: Document, is_invoice: bool):
         total += line_total
         db.add(LineItem(
             document_id=document.id,
+            business_id=document.business_id,
             description=desc,
             quantity=qty,
             unit_price=unit_price,
@@ -163,6 +165,7 @@ def maybe_review(db, document: Document, reviewer_id: int):
         if random.random() < 0.25:
             db.add(FieldCorrection(
                 document_id=document.id,
+                business_id=document.business_id,
                 field_name="client_name",
                 original_value="Clinet Name",  # typo to simulate OCR error
                 corrected_value="Client Name",

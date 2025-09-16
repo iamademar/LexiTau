@@ -1,8 +1,8 @@
 from sqlalchemy import Column, Integer, String, DateTime, Numeric, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 from pgvector.sqlalchemy import Vector
 from ..db import Base
+from ..types import JSONBCompat as JSONB
 
 
 class ColumnProfile(Base):

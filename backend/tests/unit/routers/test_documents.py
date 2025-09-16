@@ -123,6 +123,7 @@ class TestGetDocumentFields:
         for field_data in fields_data:
             field = ExtractedField(
                 document_id=document.id,
+                business_id=test_user.business_id,
                 **field_data
             )
             db_session.add(field)
@@ -148,6 +149,7 @@ class TestGetDocumentFields:
         for item_data in line_items_data:
             line_item = LineItem(
                 document_id=document.id,
+                business_id=test_user.business_id,
                 **item_data
             )
             db_session.add(line_item)
@@ -455,6 +457,7 @@ class TestGetDocumentFields:
         for field_data in fields_data:
             field = ExtractedField(
                 document_id=document.id,
+                business_id=test_user.business_id,
                 **field_data
             )
             db_session.add(field)
@@ -462,6 +465,7 @@ class TestGetDocumentFields:
         # Add line item with partial data
         line_item = LineItem(
             document_id=document.id,
+            business_id=test_user.business_id,
             description="Coffee",
             quantity=None,  # Missing quantity
             unit_price=None,  # Missing unit price

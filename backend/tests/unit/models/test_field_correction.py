@@ -60,6 +60,7 @@ class TestFieldCorrectionModel:
         user, document = test_user_and_document
         correction = FieldCorrection(
             document_id=document.id,
+            business_id=user.business_id,
             field_name="vendor_name",
             original_value="Acme Corp",
             corrected_value="ACME Corporation",
@@ -81,6 +82,7 @@ class TestFieldCorrectionModel:
         user, document = test_user_and_document
         correction = FieldCorrection(
             document_id=document.id,
+            business_id=user.business_id,
             field_name="invoice_number",
             original_value=None,
             corrected_value="INV-2024-001",
@@ -97,6 +99,7 @@ class TestFieldCorrectionModel:
         user, document = test_user_and_document
         correction = FieldCorrection(
             document_id=document.id,
+            business_id=user.business_id,
             field_name="total_amount",
             original_value="$100.00",
             corrected_value="$150.00",
@@ -129,7 +132,7 @@ class TestFieldCorrectionModel:
         ]
         created = []
         for d in data:
-            c = FieldCorrection(document_id=document.id, corrected_by=user.id, **d)
+            c = FieldCorrection(document_id=document.id, business_id=user.business_id, corrected_by=user.id, **d)
             db_session.add(c)
             created.append(c)
         db_session.commit()
@@ -147,6 +150,7 @@ class TestFieldCorrectionModel:
         # First correction
         c1 = FieldCorrection(
             document_id=document.id,
+            business_id=user.business_id,
             field_name="vendor_name",
             original_value="XYZ Corp",
             corrected_value="XYZ Corporation",
@@ -157,6 +161,7 @@ class TestFieldCorrectionModel:
         # Second correction (same field)
         c2 = FieldCorrection(
             document_id=document.id,
+            business_id=user.business_id,
             field_name="vendor_name",
             original_value="XYZ Corporation",
             corrected_value="XYZ Corp Ltd.",
@@ -188,8 +193,8 @@ class TestFieldCorrectionModel:
 
         db_session.add_all(
             [
-                FieldCorrection(document_id=document.id, field_name="field1", original_value="orig1", corrected_value="corr1", corrected_by=user.id),
-                FieldCorrection(document_id=document.id, field_name="field2", original_value="orig2", corrected_value="corr2", corrected_by=user.id),
+                FieldCorrection(document_id=document.id, business_id=user.business_id, field_name="field1", original_value="orig1", corrected_value="corr1", corrected_by=user.id),
+                FieldCorrection(document_id=document.id, business_id=user.business_id, field_name="field2", original_value="orig2", corrected_value="corr2", corrected_by=user.id),
             ]
         )
         db_session.commit()
@@ -206,6 +211,7 @@ class TestFieldCorrectionModel:
 
         ef = ExtractedField(
             document_id=document.id,
+            business_id=user.business_id,
             field_name="vendor_name",
             value="Original Vendor",
             confidence=0.65,
@@ -214,6 +220,7 @@ class TestFieldCorrectionModel:
 
         corr = FieldCorrection(
             document_id=document.id,
+            business_id=user.business_id,
             field_name="vendor_name",
             original_value="Original Vendor",
             corrected_value="Corrected Vendor Name",
@@ -248,11 +255,11 @@ class TestFieldCorrectionModel:
         db_session.add(document); db_session.commit(); db_session.refresh(document)
 
         c1 = FieldCorrection(
-            document_id=document.id, field_name="vendor_name",
+            document_id=document.id, business_id=user1.business_id, field_name="vendor_name",
             original_value="Vendor ABC", corrected_value="ABC Vendor Inc", corrected_by=user1.id
         )
         c2 = FieldCorrection(
-            document_id=document.id, field_name="total_amount",
+            document_id=document.id, business_id=user1.business_id, field_name="total_amount",
             original_value="$500.00", corrected_value="$550.00", corrected_by=user2.id
         )
         db_session.add_all([c1, c2]); db_session.commit()

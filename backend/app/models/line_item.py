@@ -14,6 +14,7 @@ class LineItem(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False, index=True)
+    business_id = Column(Integer, ForeignKey("businesses.id"), nullable=False, index=True)
     description = Column(Text, nullable=True)  # Product/service description
     quantity = Column(Numeric(10, 3), nullable=True)  # Quantity (supports decimals like 1.5 hours)
     unit_price = Column(Numeric(10, 2), nullable=True)  # Price per unit in currency
