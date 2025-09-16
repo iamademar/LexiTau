@@ -60,6 +60,17 @@ from .category import (
     Category
 )
 
+# Column Profile schemas
+from .column_profile import (
+    ColumnProfileBase,
+    ColumnProfileCreate,
+    ColumnProfileResponse,
+    ColumnProfileFilters,
+    ColumnProfileListResponse,
+    ColumnProfileSimilarityRequest,
+    ColumnProfileSimilarityResponse
+)
+
 # Make all schemas available at package level
 __all__ = [
     # Auth
@@ -106,5 +117,13 @@ __all__ = [
     "Project",
     # Category
     "CategoryBase",
-    "Category"
+    "Category",
+    # Column Profile
+    "ColumnProfileBase",
+    "ColumnProfileCreate",
+    "ColumnProfileResponse",
+    "ColumnProfileFilters",
+    "ColumnProfileListResponse",
+    "ColumnProfileSimilarityRequest",
+    "ColumnProfileSimilarityResponse"
 ]

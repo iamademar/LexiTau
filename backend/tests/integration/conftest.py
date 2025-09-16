@@ -9,7 +9,7 @@ from app.db import Base, get_db
 
 DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",
-    "postgresql+psycopg2://postgres:password@postgres_test:5432/lexextract_test",
+    "postgresql+psycopg2://postgres:password@postgres_test:5432/lexitau_test",
 )
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)

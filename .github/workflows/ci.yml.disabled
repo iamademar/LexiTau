@@ -14,7 +14,7 @@ jobs:
       postgres:
         image: postgres:15
         env:
-          POSTGRES_DB: lexextract_test
+          POSTGRES_DB: lexitau_test
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: password
         ports:
