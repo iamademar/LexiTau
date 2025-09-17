@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 repomix-output.xml
+.repomixignore
 .claude/
 
 # Environment variables - DO NOT COMMIT
