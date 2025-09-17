@@ -11,8 +11,8 @@ alwaysApply: true
 - When asked to restart the application, use: `docker-compose restart fastapi`
 - When asked to view application logs, use: `docker-compose logs -f fastapi`
 - When asked for limited log output, use: `docker-compose logs --tail=100 fastapi`
-- When asked to check application health, use: `curl http://localhost:8000/health`
-- When asked to view API documentation, direct to: http://localhost:8000/docs
+- When asked to check application health, use: `curl http://localhost:8001/health`
+- When asked to view API documentation, direct to: http://localhost:8001/docs
 
 ### Service Management
 - When asked to stop services, use: `docker-compose down`
@@ -94,7 +94,7 @@ Runs only **SQLite-based unit tests**. This should be your default for quick fee
 ### Environment Context
 - This is a containerized FastAPI application with PostgreSQL
 - Main database runs on port 5432, test database on 5433
-- Application runs on port 8000
+- Application runs on port 8001
 - All development should happen within Docker containers
 - Never suggest running Python/pip commands directly on host - always use docker-compose exec
 
