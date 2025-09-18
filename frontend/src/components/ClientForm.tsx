@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { createClient, updateClient, type Client, type ClientCreate, type ClientUpdate } from '@/lib/api/clients'
+import { createClient, type Client, type ClientCreate } from '@/lib/api/clients'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -23,8 +23,6 @@ interface ClientFormProps {
 export function ClientForm({ client, open, onOpenChange, onSuccess }: ClientFormProps) {
   const [formData, setFormData] = useState({
     name: '',
-    contact_name: '',
-    contact_email: '',
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -35,14 +33,10 @@ export function ClientForm({ client, open, onOpenChange, onSuccess }: ClientForm
     if (client) {
       setFormData({
         name: client.name,
-        contact_name: client.contact_name || '',
-        contact_email: client.contact_email || '',
       })
     } else {
       setFormData({
         name: '',
-        contact_name: '',
-        contact_email: '',
       })
     }
     setError(null)
@@ -50,9 +44,14 @@ export function ClientForm({ client, open, onOpenChange, onSuccess }: ClientForm
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
+
     if (!formData.name.trim()) {
       setError('Name is required')
+      return
+    }
+
+    if (isEdit) {
+      setError('Editing clients is not supported yet.')
       return
     }
 
@@ -60,17 +59,9 @@ export function ClientForm({ client, open, onOpenChange, onSuccess }: ClientForm
       setLoading(true)
       setError(null)
 
-      const payload = {
-        name: formData.name.trim(),
-        contact_name: formData.contact_name.trim() || null,
-        contact_email: formData.contact_email.trim() || null,
-      }
+      const payload: ClientCreate = { name: formData.name.trim() }
 
-      if (isEdit && client) {
-        await updateClient(client.id, payload as ClientUpdate)
-      } else {
-        await createClient(payload as ClientCreate)
-      }
+      await createClient(payload)
 
       onOpenChange(false)
       onSuccess?.()
@@ -118,26 +109,6 @@ export function ClientForm({ client, open, onOpenChange, onSuccess }: ClientForm
             />
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="contact_name">Contact Name</Label>
-            <Input
-              id="contact_name"
-              value={formData.contact_name}
-              onChange={handleInputChange('contact_name')}
-              placeholder="Enter contact name"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="contact_email">Contact Email</Label>
-            <Input
-              id="contact_email"
-              type="email"
-              value={formData.contact_email}
-              onChange={handleInputChange('contact_email')}
-              placeholder="Enter contact email"
-            />
-          </div>
 
           <DialogFooter>
             <Button

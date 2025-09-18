@@ -1,73 +1,69 @@
+// Client-side safe functions that use the proxy route
+
+/** Match backend shape */
 export interface Client {
-  id: number
-  name: string
-  contact_name: string | null
-  contact_email: string | null
-  created_at: string
+  id: number;
+  name: string;
+  business_id: number;
+  created_at: string;
+  // keep these optional so existing UI that reads them doesn't crash
+  contact_name?: string | null;
+  contact_email?: string | null;
 }
 
 export interface ClientCreate {
-  name: string
-  contact_name?: string | null
-  contact_email?: string | null
+  name: string;
 }
 
+/** If you keep this type, it won't be used for now */
 export interface ClientUpdate {
-  name?: string | null
-  contact_name?: string | null
-  contact_email?: string | null
+  name?: string | null;
+  contact_name?: string | null;
+  contact_email?: string | null;
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-
-async function handleApiResponse<T>(response: Response): Promise<T> {
-  if (!response.ok) {
-    const error = await response.text()
-    throw new Error(`API Error: ${response.status} - ${error}`)
+/** Shared response handler */
+async function handleApiResponse<T>(resp: Response): Promise<T> {
+  if (!resp.ok) {
+    const error = await resp.text().catch(() => "");
+    throw new Error(`API Error: ${resp.status} - ${error || resp.statusText}`);
   }
-  
-  if (response.status === 204) {
-    return {} as T
-  }
-  
-  return response.json()
+  if (resp.status === 204) return {} as T;
+  return resp.json();
 }
 
+/** List clients (GET /clients) - Client-safe via proxy route */
 export async function fetchClients(): Promise<Client[]> {
-  const response = await fetch(`${API_BASE_URL}/clients/`)
-  return handleApiResponse<Client[]>(response)
+  const resp = await fetch("/api/clients", {
+    method: "GET",
+    cache: "no-store"
+  });
+  return handleApiResponse<Client[]>(resp);
 }
 
-export async function fetchClient(id: number): Promise<Client> {
-  const response = await fetch(`${API_BASE_URL}/clients/${id}`)
-  return handleApiResponse<Client>(response)
-}
-
+/** Create client (POST /clients) - Client-safe via proxy route */
 export async function createClient(data: ClientCreate): Promise<Client> {
-  const response = await fetch(`${API_BASE_URL}/clients/`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(data),
-  })
-  return handleApiResponse<Client>(response)
+  const resp = await fetch("/api/clients", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: data.name }), // backend expects only { name }
+    cache: "no-store"
+  });
+  return handleApiResponse<Client>(resp);
+}
+
+/** Not available on backend yet – keep exports to avoid breaking imports */
+export async function fetchClient(id: number): Promise<Client> {
+  throw new Error(`Fetching client ${id} by id is not supported yet.`);
 }
 
 export async function updateClient(id: number, data: ClientUpdate): Promise<Client> {
-  const response = await fetch(`${API_BASE_URL}/clients/${id}`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(data),
-  })
-  return handleApiResponse<Client>(response)
+  throw new Error(`Updating client ${id} is not supported yet. Data: ${JSON.stringify(data)}`);
 }
 
+/** Keep deleteClient, but make it a safe stub for now */
 export async function deleteClient(id: number): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/clients/${id}`, {
-    method: 'DELETE',
-  })
-  return handleApiResponse<void>(response)
+  // Intentionally not calling the backend (no endpoint yet)
+  // Reject so callers can surface a clear message.
+  return Promise.reject(new Error(`Deleting client ${id} is not supported yet.`));
 }
