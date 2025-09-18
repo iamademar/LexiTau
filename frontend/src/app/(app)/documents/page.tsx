@@ -1,17 +1,17 @@
 'use client'
 
 import { useState } from 'react'
-import { StatementsList } from '@/components/StatementsList'
-import { StatementUploadForm } from '@/components/StatementUploadForm'
+import { DocumentsList } from '@/components/DocumentsList'
+import { DocumentUploadForm } from '@/components/DocumentUploadForm'
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Separator } from "@/components/ui/separator"
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb"
 
-export default function StatementsPage() {
+export default function DocumentsPage() {
   const [uploadFormOpen, setUploadFormOpen] = useState(false)
   const [refreshTrigger, setRefreshTrigger] = useState(0)
 
-  const handleUploadStatement = () => {
+  const handleUploadDocument = () => {
     setUploadFormOpen(true)
   }
 
@@ -38,19 +38,19 @@ export default function StatementsPage() {
             <BreadcrumbSeparator className="hidden md:block" />
             <BreadcrumbItem>
               <BreadcrumbPage>
-                Statements
+                Documents
               </BreadcrumbPage>
             </BreadcrumbItem>
           </BreadcrumbList>
         </Breadcrumb>
       </header>
       <div className="container mx-auto p-6 max-w-6xl">
-        <StatementsList
-          onUploadStatement={handleUploadStatement}
+        <DocumentsList
+          onUploadDocument={handleUploadDocument}
           refreshTrigger={refreshTrigger}
         />
 
-        <StatementUploadForm
+        <DocumentUploadForm
           open={uploadFormOpen}
           onOpenChange={handleUploadFormClose}
           onSuccess={handleUploadSuccess}

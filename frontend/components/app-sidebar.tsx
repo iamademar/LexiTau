@@ -53,9 +53,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton asChild>
-              <Link href="/statements">
+              <Link href="/documents">
                 <FileText className="size-4" />
-                Statements
+                Documents
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
