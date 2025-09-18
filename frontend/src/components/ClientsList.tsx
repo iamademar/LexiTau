@@ -128,8 +128,6 @@ export function ClientsList({ onEditClient, onCreateClient, refreshTrigger }: Cl
           <TableHeader>
             <TableRow>
               <TableHead>Name</TableHead>
-              <TableHead>Contact Name</TableHead>
-              <TableHead>Contact Email</TableHead>
               <TableHead>Created</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
@@ -138,8 +136,6 @@ export function ClientsList({ onEditClient, onCreateClient, refreshTrigger }: Cl
             {clients.map((client) => (
               <TableRow key={client.id}>
                 <TableCell className="font-medium">{client.name}</TableCell>
-                <TableCell>{client.contact_name || '-'}</TableCell>
-                <TableCell>{client.contact_email || '-'}</TableCell>
                 <TableCell>
                   {new Date(client.created_at).toLocaleDateString()}
                 </TableCell>
@@ -150,6 +146,8 @@ export function ClientsList({ onEditClient, onCreateClient, refreshTrigger }: Cl
                         variant="outline"
                         size="sm"
                         onClick={() => onEditClient(client)}
+                        disabled
+                        title="Editing is not supported yet"
                       >
                         <Edit className="w-4 h-4" />
                       </Button>

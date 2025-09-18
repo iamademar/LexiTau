@@ -24,7 +24,7 @@ export function NavSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                     <MessagesSquare className="size-4" />
                   </div>
                   <div className="flex flex-col gap-0.5 leading-none">
-                    <span className="font-semibold">LexExtract</span>
+                    <span className="font-semibold">LexTau</span>
                     <span className="text-xs">Chat Interface</span>
                   </div>
                 </Link>
@@ -46,7 +46,7 @@ export function NavSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             <SidebarMenuButton asChild>
               <Link href="/statements">
                 <FileText className="size-4" />
-                Statements
+                Upload Invoice/Receipt
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>

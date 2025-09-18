@@ -46,7 +46,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             <SidebarMenuButton asChild>
               <Link href="/statements">
                 <FileText className="size-4" />
-                Statements
+                Upload Invoice/Receipt
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
