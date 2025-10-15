@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Literal, Tuple, Callable, Optional
 from collections import defaultdict
 import re
 import time
+import logging
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -14,6 +15,8 @@ from sqlalchemy.orm import Session
 # from app.services.embedding_service import embedding_service
 # For clarity we expect an object with: await embedding_service.generate_embedding(text: str) -> List[float]
 EmbeddingServiceProtocol = Any  # duck-typed
+
+logger = logging.getLogger(__name__)
 
 # -------------------------
 # Public API
@@ -74,6 +77,23 @@ Rules:
 - Prefer standard SQL; avoid vendor-specific functions unless necessary for PostgreSQL.
 - If multiple interpretations are possible, choose the most likely reading from the given CONTEXT.
 - Output SQL only. No explanations, comments, or markdown.
+
+Schema integrity:
+- projects.id is INT
+- documents.id is UUID
+- documents.project_id (INT) references projects.id
+- line_items.document_id (UUID) references documents.id
+- Never join projects.id = documents.id
+- Always join projects.id = documents.project_id
+
+Document types:
+- documents.document_type is an ENUM with only two valid values: 'INVOICE' and 'RECEIPT'
+- If user asks about invoices, always use 'INVOICE' (not 'INV')
+- If user asks about receipts, always use 'RECEIPT' (not 'REC' or 'RCPT'
+
+Tenant scoping:
+- Always filter every query with `business_id = $business_id`
+- Never hard-code tenant IDs like `business_id = 1`
 """
 
 # --------------------------------------------------------------------------------------
@@ -123,6 +143,9 @@ async def generate_raw_responses_for_five_variants(
             max_tokens=max_tokens,
         )
         latency_ms = int((time.time() - t0) * 1000)
+
+        if resp.choices and resp.choices[0].message:
+            content = resp.choices[0].message.content
 
         vr = VariantLLMResponse(
             name=v.name,
@@ -219,6 +242,13 @@ async def build_five_prompt_variants(
             )
         )
 
+    # Log the generated prompt variants
+    logger.info("-------------------------- Generated prompt variants ----------------------------")
+    for variant in variants:
+        logger.info(f"Generated prompt variant '{variant.name}':")
+        for i, message in enumerate(variant.messages):
+            logger.info(f"  Message {i+1} ({message['role']}): {message['content'][:200]}{'...' if len(message['content']) > 200 else ''}")
+    logger.info("-------------------------- Generated prompt variants ----------------------------")
     return FiveVariants(question=question, variants=variants)
 
 # -------------------------

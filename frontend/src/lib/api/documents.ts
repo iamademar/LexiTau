@@ -56,6 +56,38 @@ export interface DocumentUploadResponse {
   results: DocumentUploadResult[];
 }
 
+export interface ExtractedField {
+  id: number;
+  document_id: number;
+  name: string;
+  value: string | number | null;
+  confidence: number | null;
+  page?: number | null;
+}
+
+export interface LineItem {
+  id: number;
+  document_id: number;
+  description: string | null;
+  quantity: number | null;
+  unit_price: number | null;
+  total: number | null;
+  tax_rate?: number | null;
+  sku?: string | null;
+  position?: number | null;
+}
+
+export interface DocumentFieldsResponse {
+  document_id: string;
+  document_info: Document;            // reuse existing Document type
+  extracted_fields: ExtractedField[];
+  line_items: LineItem[];
+  processing_status: DocumentStatus;
+  overall_confidence?: number | null;
+  fields_summary: Record<string, unknown>;
+  line_items_summary: Record<string, unknown>;
+}
+
 async function handleApiResponse<T>(resp: Response): Promise<T> {
   if (!resp.ok) {
     const txt = await resp.text().catch(() => "");
@@ -109,4 +141,10 @@ export async function uploadDocuments(files: File[]): Promise<DocumentUploadResp
 export async function fetchDocument(id: string): Promise<Document> {
   const resp = await fetch(`/api/documents/${id}`, { method: "GET", cache: "no-store" });
   return handleApiResponse<Document>(resp);
+}
+
+/** GET /documents/{id}/fields via proxy */
+export async function fetchDocumentFields(id: string): Promise<DocumentFieldsResponse> {
+  const resp = await fetch(`/api/documents/${id}/fields`, { method: "GET", cache: "no-store" });
+  return handleApiResponse<DocumentFieldsResponse>(resp);
 }

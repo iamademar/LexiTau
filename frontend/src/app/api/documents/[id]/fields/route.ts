@@ -1,4 +1,3 @@
-// frontend/src/app/api/documents/[id]/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { apiFetch } from "@/lib/api";
 
@@ -9,18 +8,13 @@ export const revalidate = 0;
 type Params = Promise<{ id: string }>;
 
 export async function GET(_: NextRequest, ctx: { params: Params }) {
-  const { id } = await ctx.params; // ✅ await the params
-  console.debug("GET /api/documents/%s", id);
-
-  const upstream = await apiFetch(`/documents/${id}`, { method: "GET" });
+  const { id } = await ctx.params;
+  const upstream = await apiFetch(`/documents/${id}/fields`, { method: "GET" });
   const body = await upstream.text();
-
-  console.debug("GET /api/documents/%s -> upstream %d", id, upstream.status);
+  const contentType = upstream.headers.get("content-type") || "application/json";
 
   return new NextResponse(body, {
     status: upstream.status,
-    headers: {
-      "content-type": upstream.headers.get("content-type") || "application/json",
-    },
+    headers: { "content-type": contentType },
   });
 }

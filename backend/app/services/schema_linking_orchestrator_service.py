@@ -59,7 +59,6 @@ TENANTED_TABLES = {
     "field_corrections": "business_id",
     "clients": "business_id",
     "projects": "business_id",
-    "categories": "business_id",
     "users": "business_id",
 }
 
@@ -198,7 +197,7 @@ async def run_sql_first_linking(
     # Add tenant scoping hint to the prompt
     tenant_hint = (
         f"\nTENANT SCOPE: All queries MUST constrain rows to business_id = {business_id} "
-        f"on every table that has this column. If a table lacks business_id, JOIN through "
+        f"on every table that has this column except for categories. If a table lacks business_id, JOIN through "
         f"a table that has it and include the constraint there."
     )
 

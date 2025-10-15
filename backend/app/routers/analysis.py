@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import List, Tuple
 import anyio
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -17,6 +18,8 @@ from app.services.value_index_service import ValueLSHIndex
 from app.services.schema_linking_orchestrator_service import run_sql_first_linking
 from app.services.openai_llm_service import OpenAILLMService
 from app.core.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 # ---------
 # SQL Safety & Normalization
@@ -118,6 +121,7 @@ class OpenAIClient:
         self.max_tokens = max_tokens
 
     async def chat(self, messages: list[dict]) -> str:
+
         # OpenAI python SDK call is synchronous; run it without blocking the event loop
         def _call():
             resp = self.client.chat.completions.create(
@@ -126,6 +130,11 @@ class OpenAIClient:
                 temperature=self.temperature,
                 **({} if self.max_tokens is None else {"max_tokens": self.max_tokens}),
             )
+
+            # Log the response from OpenAI
+            if resp.choices and resp.choices[0].message:
+                content = resp.choices[0].message.content
+
             return resp.choices[0].message.content.strip()
 
         return await anyio.to_thread.run_sync(_call)
@@ -193,6 +202,9 @@ async def run_pipeline(
             include_full_schema_cap=None,
             trim_long_to_examples=True,
         )
+        logger.info("-------------------------- Final SQL ----------------------------")
+        logger.info(final_sql)
+        logger.info("-------------------------- Final SQL ----------------------------")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Analysis failed: {e}")
 
