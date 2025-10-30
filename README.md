@@ -1,4 +1,4 @@
-# LexiTau — Text-to-SQL with Safety, Explainability, and Multi-Tenancy
+# LexiTau: Text-to-SQL with Safety, Explainability, and Multi-Tenancy
 
 LexiTau turns natural-language questions about tenant data into **read-only SQL** with clear explanations. It combines schema profiling, metadata-aware linking, and a policy layer that blocks unsafe statements before execution.
 
